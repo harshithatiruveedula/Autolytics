@@ -523,6 +523,114 @@ def chart_grouped_bar(df: pd.DataFrame, cat_col: str, num_col: str,
     return chart
 
 
+def chart_cat_cat_grouped(df: pd.DataFrame, col_a: str, col_b: str,
+                          max_a: int = 12, max_b: int = 8) -> Any:
+    """Grouped / stacked bar: count of col_b values within each col_a value.
+
+    col_a is the X-axis grouping (primary category, e.g. Medical Condition).
+    col_b is the color/legend dimension (secondary category, e.g. Medication).
+    Only the top-N categories of each column are kept to stay readable.
+    """
+    if not _ALTAIR:
+        return None
+    s = df[[col_a, col_b]].dropna().copy()
+    if len(s) < _MIN_ROWS:
+        return None
+
+    # Keep only top categories for each axis to avoid unreadable charts
+    top_a = s[col_a].value_counts().head(max_a).index.tolist()
+    top_b = s[col_b].value_counts().head(max_b).index.tolist()
+    s = s[s[col_a].isin(top_a) & s[col_b].isin(top_b)]
+    if len(s) < _MIN_ROWS:
+        return None
+
+    agg = s.groupby([col_a, col_b]).size().reset_index(name="count")
+    n_b = agg[col_b].nunique()
+    height = max(220, len(top_a) * max(20, int(200 / max(n_b, 1))))
+    height = min(height, 480)
+
+    chart = (
+        alt.Chart(agg)
+        .mark_bar()
+        .encode(
+            alt.X(f"{col_a}:N", sort="-y", title=col_a,
+                  axis=alt.Axis(labelAngle=-35, labelLimit=120)),
+            alt.Y("count:Q", title="Record Count"),
+            alt.Color(f"{col_b}:N",
+                      scale=alt.Scale(range=_PALETTE),
+                      legend=alt.Legend(title=col_b, labelLimit=120)),
+            alt.Order(f"{col_b}:N"),
+            tooltip=[f"{col_a}:N", f"{col_b}:N",
+                     alt.Tooltip("count:Q", title="Count")],
+        )
+        .properties(title=f"{col_b} by {col_a}", height=height)
+    )
+    return chart
+
+
+def chart_cat_num_box(df: pd.DataFrame, cat_col: str, num_col: str,
+                      max_cats: int = 15) -> Any:
+    """Box plot of a numerical column split by a categorical column."""
+    if not _ALTAIR:
+        return None
+    s = df[[cat_col, num_col]].dropna().copy()
+    if len(s) < _MIN_ROWS:
+        return None
+    top_cats = s[cat_col].value_counts().head(max_cats).index.tolist()
+    s = s[s[cat_col].isin(top_cats)]
+    if len(s) < _MIN_ROWS:
+        return None
+    height = max(220, len(top_cats) * 22)
+    chart = (
+        alt.Chart(s)
+        .mark_boxplot(size=14)
+        .encode(
+            alt.Y(f"{cat_col}:N", sort="-x", title=cat_col),
+            alt.X(f"{num_col}:Q", title=num_col),
+            alt.Color(f"{cat_col}:N",
+                      scale=alt.Scale(range=_PALETTE),
+                      legend=None),
+            tooltip=[f"{cat_col}:N", f"{num_col}:Q"],
+        )
+        .properties(title=f"{num_col} Distribution by {cat_col}", height=height)
+    )
+    return chart
+
+
+def chart_time_cat(df: pd.DataFrame, date_col: str, cat_col: str,
+                   max_cats: int = 6) -> Any:
+    """Line chart: count of records per category over time (monthly bins)."""
+    if not _ALTAIR:
+        return None
+    s = df[[date_col, cat_col]].dropna().copy()
+    if len(s) < _MIN_ROWS:
+        return None
+    s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+    s = s.dropna(subset=[date_col])
+    if len(s) < _MIN_ROWS:
+        return None
+    top_cats = s[cat_col].value_counts().head(max_cats).index.tolist()
+    s = s[s[cat_col].isin(top_cats)]
+    s["_period"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+    agg = s.groupby(["_period", cat_col]).size().reset_index(name="count")
+    agg.columns = ["period", cat_col, "count"]
+    chart = (
+        alt.Chart(agg)
+        .mark_line(point=True)
+        .encode(
+            alt.X("period:T", title="Date"),
+            alt.Y("count:Q", title="Record Count"),
+            alt.Color(f"{cat_col}:N",
+                      scale=alt.Scale(range=_PALETTE),
+                      legend=alt.Legend(title=cat_col)),
+            tooltip=["period:T", f"{cat_col}:N",
+                     alt.Tooltip("count:Q", title="Count")],
+        )
+        .properties(title=f"{cat_col} Counts over Time", height=260)
+    )
+    return chart
+
+
 def chart_correlation_heatmap(df: pd.DataFrame, num_cols: list[str]) -> Any:
     if not _ALTAIR or len(num_cols) < 2:
         return None

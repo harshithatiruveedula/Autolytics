@@ -275,12 +275,19 @@ def _ensure_base_eda(df: pd.DataFrame) -> None:
 
 def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                                  chart_type: str) -> list[dict]:
-    """Build Altair chart objects for the user-selected columns and chart type."""
+    """Chart planner: evaluate all meaningful column combinations and build charts.
+
+    Priority order:
+      1. Pairwise combination charts (Cat×Cat, Cat×Num, Date×Num, Date×Cat, Num×Num)
+      2. Individual distributions (histograms, bar charts, donuts)
+      3. Correlation heatmap when multiple numerics are present
+    """
     from eda import (
         classify_columns, _pick_col,
         chart_histogram, chart_boxplot, chart_bar_categorical, chart_donut,
         chart_timeseries, chart_scatter, chart_grouped_bar, chart_correlation_heatmap,
-        _MAX_CAT, _MIN_ROWS,
+        chart_cat_cat_grouped, chart_cat_num_box, chart_time_cat,
+        _MAX_CAT,
     )
 
     if not selected_cols:
@@ -288,169 +295,253 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
 
     # Work only with the selected subset
     sub = df[selected_cols].copy()
-    all_cols_info = classify_columns(sub)
-    num_cols = all_cols_info["numeric"]
-    cat_cols = all_cols_info["categorical"]
-    dt_cols = all_cols_info["datetime"]
-    bool_cols = all_cols_info["boolean"]
+    info = classify_columns(sub)
+    num_cols  = info["numeric"]
+    cat_cols  = info["categorical"]
+    dt_cols   = info["datetime"]
+    bool_cols = info["boolean"]
+
+    # Treat boolean columns as categorical for combination analysis
+    all_cat = cat_cols + bool_cols
 
     charts: list[dict] = []
+    seen_pairs: set[frozenset] = set()   # prevent duplicate pair charts
+    MAX_CHARTS = 20
 
-    def add(title: str, section: str, desc: str, chart_obj) -> None:
-        if chart_obj is not None:
+    def add(title: str, section: str, desc: str, cols_used: list[str], chart_obj) -> None:
+        if chart_obj is not None and len(charts) < MAX_CHARTS:
             charts.append({
                 "id": str(uuid.uuid4()),
                 "title": title,
                 "section": section,
                 "desc": desc,
+                "cols_used": cols_used,
                 "chart": chart_obj,
             })
 
     auto = (chart_type == "Auto (recommended)")
 
-    # ── Explicit type selection ─────────────────────────────────────────
+    # ── Explicit single chart-type selection ────────────────────────────────
     if not auto:
         if chart_type == "Histogram":
-            for col in num_cols[:4]:
+            for col in num_cols[:5]:
                 add(f"Histogram — {col}", "hist",
-                    f"Distribution of {col} values.",
+                    f"Distribution of {col}.", [col],
                     chart_histogram(sub, col))
+
         elif chart_type == "Box Plot":
-            for col in num_cols[:4]:
-                add(f"Box Plot — {col}", "box",
-                    f"Spread and outliers for {col}.",
-                    chart_boxplot(sub, col))
+            # If there's a Cat col, prefer Cat×Num box; else plain box per num col
+            if all_cat and num_cols:
+                cat_col = all_cat[0]
+                for num in num_cols[:3]:
+                    add(f"{num} by {cat_col}", "catbox",
+                        f"Distribution of {num} across {cat_col} categories.",
+                        [cat_col, num],
+                        chart_cat_num_box(sub, cat_col, num))
+            else:
+                for col in num_cols[:4]:
+                    add(f"Box Plot — {col}", "box",
+                        f"Spread and outliers for {col}.", [col],
+                        chart_boxplot(sub, col))
+
         elif chart_type == "Bar Chart":
-            for col in cat_cols[:3]:
+            for col in all_cat[:4]:
                 add(f"Bar Chart — {col}", "catbar",
-                    f"Frequency of each category in {col}.",
+                    f"Frequency of each category in {col}.", [col],
                     chart_bar_categorical(sub, col))
+
         elif chart_type == "Donut / Pie Chart":
-            for col in cat_cols[:2]:
+            for col in all_cat[:3]:
                 if 2 <= sub[col].nunique(dropna=True) <= 12:
                     add(f"Donut — {col}", "donut",
-                        f"Proportional breakdown of {col}.",
+                        f"Proportional breakdown of {col}.", [col],
                         chart_donut(sub, col))
+
         elif chart_type == "Scatter Plot":
             if len(num_cols) >= 2:
-                c_col = cat_cols[0] if cat_cols else None
+                c_col = all_cat[0] if all_cat else None
                 add(f"Scatter — {num_cols[0]} vs {num_cols[1]}", "scatter",
                     f"Relationship between {num_cols[0]} and {num_cols[1]}.",
+                    [num_cols[0], num_cols[1]],
                     chart_scatter(sub, num_cols[0], num_cols[1], c_col))
             else:
                 st.warning("Scatter plot needs at least 2 numeric columns in your selection.")
+
         elif chart_type == "Line / Time Series":
             if dt_cols and num_cols:
                 add(f"{num_cols[0]} over Time", "time",
                     f"Trend of {num_cols[0]} over {dt_cols[0]}.",
+                    [dt_cols[0], num_cols[0]],
                     chart_timeseries(sub, dt_cols[0], num_cols[0]))
+            elif dt_cols and all_cat:
+                add(f"{all_cat[0]} Counts over Time", "time_cat",
+                    f"How {all_cat[0]} counts change over {dt_cols[0]}.",
+                    [dt_cols[0], all_cat[0]],
+                    chart_time_cat(sub, dt_cols[0], all_cat[0]))
             else:
-                st.warning("Time series needs a date column and a numeric column in your selection.")
+                st.warning("Time series needs a date column in your selection.")
+
         elif chart_type == "Correlation Heatmap":
             if len(num_cols) >= 2:
                 add("Correlation Heatmap", "corr",
                     "Pairwise correlations between selected numeric columns.",
+                    num_cols,
                     chart_correlation_heatmap(sub, num_cols))
             else:
                 st.warning("Correlation heatmap needs at least 2 numeric columns.")
+
         elif chart_type == "Grouped Bar":
-            if cat_cols and num_cols:
-                cat_col = cat_cols[0]
-                num_col = num_cols[0]
+            # Prefer Cat×Cat if two categoricals selected, else Cat×Num
+            if len(all_cat) >= 2:
+                a, b = all_cat[0], all_cat[1]
+                add(f"{b} by {a}", "cat_cat",
+                    f"Count of {b} categories within each {a} group.",
+                    [a, b],
+                    chart_cat_cat_grouped(sub, a, b))
+            elif all_cat and num_cols:
+                cat_col, num_col = all_cat[0], num_cols[0]
                 agg = "sum" if any(kw in num_col.lower() for kw in
                                    ("amount","sales","revenue","total","billing")) else "mean"
                 add(f"{num_col} by {cat_col}", "groupbar",
                     f"{'Total' if agg=='sum' else 'Average'} {num_col} for each {cat_col}.",
+                    [cat_col, num_col],
                     chart_grouped_bar(sub, cat_col, num_col, agg))
             else:
-                st.warning("Grouped bar needs at least one categorical and one numeric column.")
+                st.warning("Grouped bar needs categorical columns in your selection.")
         return charts
 
-    # ── Auto mode ─────────────────────────────────────────────────────────
-    used_num: set[str] = set()
-    used_cat: set[str] = set()
+    # ── Auto planner ────────────────────────────────────────────────────────
+    # PHASE 1: All meaningful pairwise combination charts
+    # Cat × Cat — generates grouped bar for every pair (up to a sensible limit)
+    cat_pairs_done = 0
+    for i, col_a in enumerate(all_cat):
+        for col_b in all_cat[i + 1:]:
+            if cat_pairs_done >= 6:
+                break
+            pair_key = frozenset([col_a, col_b])
+            if pair_key in seen_pairs:
+                continue
+            # Prefer the higher-cardinality column as the X-axis (grouping dimension)
+            nu_a = sub[col_a].nunique(dropna=True)
+            nu_b = sub[col_b].nunique(dropna=True)
+            axis_col, color_col = (col_a, col_b) if nu_a >= nu_b else (col_b, col_a)
+            c = chart_cat_cat_grouped(sub, axis_col, color_col)
+            if c is not None:
+                add(f"{color_col} by {axis_col}", "cat_cat",
+                    f"Count of {color_col} values within each {axis_col} group.",
+                    [axis_col, color_col], c)
+                seen_pairs.add(pair_key)
+                cat_pairs_done += 1
 
-    # 1. Time series
-    if dt_cols and num_cols:
-        dt_col = dt_cols[0]
-        val_col = (_pick_col(sub, num_cols, {"amount","sales","revenue","price","total",
-                                              "billing","score","value","qty","quantity"})
-                   or num_cols[0])
-        add(f"{val_col} over Time", "time",
-            f"Monthly aggregated trend of {val_col} over {dt_col}.",
-            chart_timeseries(sub, dt_col, val_col))
-        used_num.add(val_col)
-
-    # 2. Donut for first low-cardinality categorical
-    for cat in cat_cols:
-        nu = sub[cat].nunique(dropna=True)
-        if 2 <= nu <= 12:
-            add(f"Distribution — {cat}", "donut",
-                f"Proportional breakdown of {cat} categories.",
-                chart_donut(sub, cat))
-            used_cat.add(cat)
-            break
-
-    # 3. Grouped bar: first categorical × first numeric
-    if cat_cols and num_cols:
-        cat_col = cat_cols[0]
-        num_col = (_pick_col(sub, num_cols, {"amount","sales","revenue","price","total",
-                                              "billing","score","value"}) or num_cols[0])
-        if sub[cat_col].nunique(dropna=True) <= _MAX_CAT:
+    # Cat × Num — for each (cat, num) pair: grouped bar + box plot
+    cat_num_pairs_done = 0
+    for cat_col in all_cat:
+        for num_col in num_cols:
+            if cat_num_pairs_done >= 8:
+                break
+            pair_key = frozenset([cat_col, num_col])
+            if pair_key in seen_pairs:
+                continue
+            nu = sub[cat_col].nunique(dropna=True)
+            if nu < 2:
+                continue
             agg = "sum" if any(kw in num_col.lower() for kw in
-                               ("amount","sales","revenue","total","billing")) else "mean"
-            add(f"{'Total' if agg=='sum' else 'Avg'} {num_col} by {cat_col}", "groupbar",
-                f"{'Total' if agg=='sum' else 'Average'} {num_col} grouped by {cat_col}.",
-                chart_grouped_bar(sub, cat_col, num_col, agg))
-            used_cat.add(cat_col); used_num.add(num_col)
+                               ("amount","sales","revenue","total","billing","price")) else "mean"
+            label = "Total" if agg == "sum" else "Avg"
+            # Grouped bar
+            c = chart_grouped_bar(sub, cat_col, num_col, agg)
+            if c is not None:
+                add(f"{label} {num_col} by {cat_col}", "groupbar",
+                    f"{label} {num_col} for each {cat_col} category.",
+                    [cat_col, num_col], c)
+                seen_pairs.add(pair_key)
+                cat_num_pairs_done += 1
+            # Box plot for distribution (only when few categories)
+            if nu <= 12:
+                c2 = chart_cat_num_box(sub, cat_col, num_col)
+                if c2 is not None:
+                    add(f"{num_col} Distribution by {cat_col}", "catbox",
+                        f"Spread of {num_col} values across {cat_col} categories.",
+                        [cat_col, num_col], c2)
 
-    # 4. Histogram for remaining numeric cols (up to 3)
-    hist_count = 0
-    for num in num_cols:
-        if hist_count >= 3:
-            break
-        add(f"Histogram — {num}", "hist",
-            f"Distribution of {num} values across all records.",
-            chart_histogram(sub, num))
-        hist_count += 1
+    # Date × Num — time-series
+    for dt_col in dt_cols:
+        for num_col in num_cols:
+            pair_key = frozenset([dt_col, num_col])
+            if pair_key in seen_pairs:
+                continue
+            c = chart_timeseries(sub, dt_col, num_col)
+            if c is not None:
+                add(f"{num_col} over Time", "time",
+                    f"Monthly trend of {num_col} over {dt_col}.",
+                    [dt_col, num_col], c)
+                seen_pairs.add(pair_key)
 
-    # 5. Box plot for first numeric col
-    if num_cols:
-        add(f"Box Plot — {num_cols[0]}", "box",
-            f"Median, spread, and outliers for {num_cols[0]}.",
-            chart_boxplot(sub, num_cols[0]))
+    # Date × Cat — category counts over time
+    for dt_col in dt_cols:
+        for cat_col in all_cat[:2]:
+            pair_key = frozenset([dt_col, cat_col])
+            if pair_key in seen_pairs:
+                continue
+            nu = sub[cat_col].nunique(dropna=True)
+            if 2 <= nu <= 12:
+                c = chart_time_cat(sub, dt_col, cat_col)
+                if c is not None:
+                    add(f"{cat_col} Counts over Time", "time_cat",
+                        f"How {cat_col} record counts change over {dt_col}.",
+                        [dt_col, cat_col], c)
+                    seen_pairs.add(pair_key)
 
-    # 6. Scatter
-    remaining_num = [c for c in num_cols if c not in used_num]
-    if len(remaining_num) >= 2:
-        x, y = remaining_num[0], remaining_num[1]
-        c_col = next((c for c in cat_cols if c not in used_cat), None)
-        add(f"Scatter — {x} vs {y}", "scatter",
-            f"Relationship between {x} and {y}.",
-            chart_scatter(sub, x, y, c_col))
-    elif len(num_cols) >= 2:
-        c_col = next((c for c in cat_cols if c not in used_cat), None)
-        add(f"Scatter — {num_cols[0]} vs {num_cols[1]}", "scatter",
-            f"Relationship between {num_cols[0]} and {num_cols[1]}.",
-            chart_scatter(sub, num_cols[0], num_cols[1], c_col))
+    # Num × Num — scatter plots
+    for i, x_col in enumerate(num_cols):
+        for y_col in num_cols[i + 1:]:
+            pair_key = frozenset([x_col, y_col])
+            if pair_key in seen_pairs:
+                continue
+            c_col = all_cat[0] if all_cat else None
+            c = chart_scatter(sub, x_col, y_col, c_col)
+            if c is not None:
+                add(f"Scatter — {x_col} vs {y_col}", "scatter",
+                    f"Relationship between {x_col} and {y_col}.",
+                    [x_col, y_col], c)
+                seen_pairs.add(pair_key)
 
-    # 7. Second categorical bar (if different from donut)
-    for cat in cat_cols:
-        if cat in used_cat:
-            continue
-        nu = sub[cat].nunique(dropna=True)
-        if 2 <= nu <= _MAX_CAT:
-            add(f"Bar Chart — {cat}", "catbar",
-                f"Frequency of each value in {cat}.",
-                chart_bar_categorical(sub, cat))
-            used_cat.add(cat)
-            break
+    # PHASE 2: Individual distributions for remaining columns
+    individual_done = set(col for pair in seen_pairs for col in pair)
 
-    # 8. Correlation heatmap
+    for cat_col in all_cat:
+        nu = sub[cat_col].nunique(dropna=True)
+        if 2 <= nu <= 12 and cat_col not in individual_done:
+            c = chart_donut(sub, cat_col)
+            if c is not None:
+                add(f"Distribution — {cat_col}", "donut",
+                    f"Proportional breakdown of {cat_col}.",
+                    [cat_col], c)
+                individual_done.add(cat_col)
+        elif nu > 12 and cat_col not in individual_done:
+            c = chart_bar_categorical(sub, cat_col)
+            if c is not None:
+                add(f"Top Categories — {cat_col}", "catbar",
+                    f"Most frequent values in {cat_col}.",
+                    [cat_col], c)
+                individual_done.add(cat_col)
+
+    for num_col in num_cols:
+        if num_col not in individual_done:
+            c = chart_histogram(sub, num_col)
+            if c is not None:
+                add(f"Histogram — {num_col}", "hist",
+                    f"Distribution of {num_col} values.",
+                    [num_col], c)
+                individual_done.add(num_col)
+
+    # PHASE 3: Correlation heatmap when multiple numerics are present
     if len(num_cols) >= 2:
-        add("Correlation Heatmap", "corr",
-            "Pairwise Pearson correlations between selected numeric columns.",
-            chart_correlation_heatmap(sub, num_cols))
+        c = chart_correlation_heatmap(sub, num_cols)
+        if c is not None:
+            add("Correlation Heatmap", "corr",
+                "Pairwise Pearson correlations between numeric columns.",
+                num_cols, c)
 
     return charts
 
@@ -523,219 +614,214 @@ def _render_eda_page() -> None:
         st.info("Upload a dataset from the **Upload Dataset** page to get started.", icon="📂")
         return
 
-    # Compute cheap base stats once per dataset
+    # Compute cheap base stats once per dataset (KPIs, profile, insights)
     try:
         _ensure_base_eda(df)
     except Exception as exc:
         st.error(f"Could not analyse the dataset: {exc}")
         return
 
-    cols_info = st.session_state.eda_cols or {}
-    all_cols = list(df.columns)
-    id_cols = set(cols_info.get("identifier", []))
-    # Default selection: all non-identifier columns, capped at 12
-    default_selection = [c for c in all_cols if c not in id_cols][:12]
+    cols_info      = st.session_state.eda_cols or {}
+    all_cols       = list(df.columns)
+    id_cols        = set(cols_info.get("identifier", []))
+    default_sel    = [c for c in all_cols if c not in id_cols][:12]
 
-    # ── Header row ──────────────────────────────────────────────────────────
-    h_left, h_right = st.columns([3, 1])
-    with h_left:
-        st.markdown(
-            "<h2 style='margin:0 0 2px;color:#0b1c3a;font-size:24px;font-weight:850'>"
-            "📊 EDA &amp; Charts</h2>"
-            "<p style='margin:0 0 6px;color:#52698e;font-size:12px'>"
-            "Select columns, choose a chart type, then click <b>Generate Charts</b>.</p>",
-            unsafe_allow_html=True,
-        )
-    with h_right:
-        st.write("")
+    # ── 1. Page header (no empty columns that add height) ───────────────────
+    st.markdown(
+        "<h2 style='margin:0 0 2px;color:#0b1c3a;font-size:24px;font-weight:850'>"
+        "📊 EDA &amp; Charts</h2>"
+        "<p style='margin:0;color:#52698e;font-size:12px'>"
+        "Select columns, choose a chart type, then click "
+        "<strong>Generate Charts</strong>.</p>",
+        unsafe_allow_html=True,
+    )
 
-    # ── Dataset info ────────────────────────────────────────────────────────
+    # ── 2. Dataset info banner ───────────────────────────────────────────────
     st.markdown(
         f"<div style='background:#f1f6ff;border:1px solid #dde8ff;border-radius:8px;"
-        f"padding:8px 14px;font-size:12px;color:#3558a0;margin-bottom:12px'>"
+        f"padding:7px 13px;font-size:12px;color:#3558a0;margin:8px 0 12px'>"
         f"🗂 <b>{st.session_state.filename or 'dataset'}</b> — "
         f"{len(df):,} rows × {len(df.columns)} columns</div>",
         unsafe_allow_html=True,
     )
 
-    # ── Column selection ────────────────────────────────────────────────────
-    with st.expander("⚙️ Column & Chart Selection", expanded=True):
-        sel_col, ctrl_col = st.columns([4, 1])
-        with sel_col:
-            # Use session state to preserve selection across reruns
-            if st.session_state.eda_selected_cols is None:
-                st.session_state.eda_selected_cols = default_selection
+    # ── 3. Column & chart selection (collapsed after first generation) ───────
+    has_charts = bool(st.session_state.eda_charts)
+    with st.expander("⚙️ Column & Chart Selection", expanded=not has_charts):
+        # Column multiselect
+        if st.session_state.eda_selected_cols is None:
+            st.session_state.eda_selected_cols = default_sel
+
+        ms_col, btn_col = st.columns([5, 1])
+        with ms_col:
             selected_cols = st.multiselect(
-                "Select columns to visualize",
+                "Columns to visualize",
                 options=all_cols,
                 default=st.session_state.eda_selected_cols,
                 key="ms_eda_cols",
-                help="Identifier columns (IDs, keys) are excluded by default but can be added manually.",
+                help="ID/key columns are excluded by default but may be added manually.",
             )
             st.session_state.eda_selected_cols = selected_cols
-        with ctrl_col:
-            st.write("")
-            st.write("")
-            if st.button("Select All", key="btn_sel_all", use_container_width=True):
+        with btn_col:
+            st.write("")          # small spacer so buttons align with the multiselect
+            if st.button("All", key="btn_sel_all", use_container_width=True,
+                         help="Select all columns"):
                 st.session_state.eda_selected_cols = all_cols
                 st.rerun()
-            if st.button("Clear", key="btn_sel_clear", use_container_width=True):
+            if st.button("Clear", key="btn_sel_clear", use_container_width=True,
+                         help="Clear selection"):
                 st.session_state.eda_selected_cols = []
                 st.rerun()
-
-        # Chart type selector
-        chart_type = st.selectbox(
-            "Chart type",
-            options=_CHART_TYPE_OPTIONS,
-            index=_CHART_TYPE_OPTIONS.index(
-                st.session_state.eda_chart_type
-                if st.session_state.eda_chart_type in _CHART_TYPE_OPTIONS
-                else "Auto (recommended)"
-            ),
-            key="sel_chart_type",
-            help="'Auto' recommends suitable charts based on the selected columns.",
-        )
-        st.session_state.eda_chart_type = chart_type
 
         # Identifier warning
         selected_ids = [c for c in selected_cols if c in id_cols]
         if selected_ids:
             st.caption(
-                f"⚠️ Identifier column(s) selected: **{', '.join(selected_ids)}**. "
-                "These are high-cardinality ID fields and usually won't produce meaningful charts."
+                f"⚠️ ID-like column(s) selected: **{', '.join(selected_ids)}** — "
+                "these rarely produce meaningful charts."
             )
 
-        # Generate Charts button
-        generate_clicked = st.button(
-            "✦ Generate Charts",
-            type="primary",
-            use_container_width=True,
-            key="btn_generate_eda",
-        )
+        # Chart type + Generate button on one row
+        ct_col, gen_col = st.columns([3, 1])
+        with ct_col:
+            chart_type = st.selectbox(
+                "Chart type",
+                options=_CHART_TYPE_OPTIONS,
+                index=_CHART_TYPE_OPTIONS.index(
+                    st.session_state.eda_chart_type
+                    if st.session_state.eda_chart_type in _CHART_TYPE_OPTIONS
+                    else "Auto (recommended)"
+                ),
+                key="sel_chart_type",
+                label_visibility="collapsed",
+            )
+            st.session_state.eda_chart_type = chart_type
+        with gen_col:
+            generate_clicked = st.button(
+                "✦ Generate Charts",
+                type="primary",
+                use_container_width=True,
+                key="btn_generate_eda",
+            )
 
-    # ── Validation + chart generation ───────────────────────────────────────
+    # ── 4. Run chart generation (state mutation + rerun, no rendering here) ─
     if generate_clicked:
         if not selected_cols:
             st.warning("Select at least one column before generating charts.", icon="⚠️")
         else:
             with st.spinner("Building charts…"):
                 try:
-                    charts = _build_charts_for_selection(
+                    new_charts = _build_charts_for_selection(
                         df, selected_cols, st.session_state.eda_chart_type
                     )
-                    if not charts:
-                        st.session_state.eda_error = (
-                            "No suitable charts could be built for the selected columns "
-                            "and chart type. Try different columns or choose 'Auto'."
+                    if new_charts:
+                        st.session_state.eda_charts = new_charts
+                        st.session_state.eda_error  = None
+                    else:
+                        st.session_state.eda_error  = (
+                            "No suitable charts could be built for those columns and "
+                            "chart type. Try a different selection or choose 'Auto'."
                         )
                         st.session_state.eda_charts = []
-                    else:
-                        st.session_state.eda_charts = charts
-                        st.session_state.eda_error = None
                 except Exception as exc:
-                    st.session_state.eda_error = f"Chart generation failed: {exc}"
+                    st.session_state.eda_error  = f"Chart generation failed: {exc}"
                     st.session_state.eda_charts = []
-            st.rerun()
+            st.rerun()   # single controlled rerun — returns here with updated state
 
-    # ── Errors ──────────────────────────────────────────────────────────────
+    # ── 5. Error banner ─────────────────────────────────────────────────────
     if st.session_state.eda_error:
         st.error(st.session_state.eda_error)
 
-    # ── KPI cards ───────────────────────────────────────────────────────────
+    # ── 6. KPI cards ────────────────────────────────────────────────────────
     kpis = st.session_state.eda_kpis or []
     if kpis:
         st.markdown("<div class='sec-title'>📌 Key Metrics</div>", unsafe_allow_html=True)
         _render_kpi_cards(kpis)
 
-    # ── Charts ──────────────────────────────────────────────────────────────
+    # ── 7. Generated charts (directly below KPIs — no empty placeholder) ────
     charts = st.session_state.eda_charts
-    if not charts and not generate_clicked:
+    if charts:
+        st.markdown("<div class='sec-title'>📉 Generated Charts</div>", unsafe_allow_html=True)
+        _render_chart_cards(charts)
+    else:
+        # Compact message only — no tall empty container
         st.markdown(
-            "<div style='text-align:center;padding:32px 16px;color:#7285a7'>"
-            "<div style='font-size:40px;margin-bottom:8px'>📈</div>"
-            "<div style='font-size:14px;font-weight:700;margin-bottom:4px'>No charts yet</div>"
-            "<div style='font-size:12px'>Select columns above and click <b>Generate Charts</b>.</div>"
+            "<div style='background:#f7f9fd;border:1px dashed #c8d8f0;border-radius:10px;"
+            "padding:18px 20px;color:#7285a7;font-size:13px;margin:8px 0 16px;text-align:center'>"
+            "📈 Select columns above and click <b>Generate Charts</b> to create visualizations."
             "</div>",
             unsafe_allow_html=True,
         )
-    elif charts:
-        st.markdown("<div class='sec-title'>📉 Generated Charts</div>", unsafe_allow_html=True)
-        _render_chart_cards(charts)
 
-    # ── Insights ────────────────────────────────────────────────────────────
+    # ── 8. Insights ─────────────────────────────────────────────────────────
     insights = st.session_state.eda_insights or []
     if insights:
-        st.markdown("<div class='sec-title'>💡 Auto-generated Insights</div>", unsafe_allow_html=True)
+        st.markdown("<div class='sec-title'>💡 Auto-generated Insights</div>",
+                    unsafe_allow_html=True)
         for ins in insights:
-            st.markdown(f"<div class='insight-bar'>• {ins}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='insight-bar'>• {ins}</div>",
+                        unsafe_allow_html=True)
 
-    # ── Data overview tabs ───────────────────────────────────────────────────
+    # ── 9. Data overview (profile, stats, missing, outliers, correlation) ────
     st.markdown("<div class='sec-title'>🔍 Data Overview</div>", unsafe_allow_html=True)
     tab_profile, tab_stats, tab_missing, tab_outliers, tab_corr = st.tabs([
         "Column Profile", "Descriptive Stats", "Missing Values", "Outliers", "Correlation",
     ])
     with tab_profile:
-        profile = st.session_state.eda_profile
-        if profile is not None:
-            st.dataframe(profile, use_container_width=True, hide_index=True)
+        if st.session_state.eda_profile is not None:
+            st.dataframe(st.session_state.eda_profile, use_container_width=True, hide_index=True)
     with tab_stats:
-        stats = st.session_state.eda_stats
-        if stats is None or stats.empty:
-            st.info("No numeric columns found for descriptive statistics.")
+        s = st.session_state.eda_stats
+        if s is None or s.empty:
+            st.info("No numeric columns for descriptive statistics.")
         else:
-            st.dataframe(stats, use_container_width=True, hide_index=True)
+            st.dataframe(s, use_container_width=True, hide_index=True)
     with tab_missing:
-        missing = st.session_state.eda_missing
-        if missing is None or missing.empty:
-            st.success("No missing values detected in this dataset.", icon="✅")
+        m = st.session_state.eda_missing
+        if m is None or m.empty:
+            st.success("No missing values in this dataset.", icon="✅")
         else:
-            st.dataframe(missing, use_container_width=True, hide_index=True)
+            st.dataframe(m, use_container_width=True, hide_index=True)
     with tab_outliers:
-        outliers = st.session_state.eda_outliers
-        if outliers is None or outliers.empty:
-            st.info("No numeric columns available for outlier analysis.")
+        o = st.session_state.eda_outliers
+        if o is None or o.empty:
+            st.info("No numeric columns for outlier analysis.")
         else:
-            out_disp = outliers[outliers["outliers"] > 0]
-            if out_disp.empty:
+            od = o[o["outliers"] > 0]
+            if od.empty:
                 st.success("No outliers detected (IQR method).", icon="✅")
             else:
-                st.dataframe(out_disp, use_container_width=True, hide_index=True)
+                st.dataframe(od, use_container_width=True, hide_index=True)
     with tab_corr:
-        corr_df = st.session_state.eda_corr_df
-        if corr_df is None or corr_df.empty:
-            st.info("At least 2 numeric columns are needed for correlation analysis.")
+        c_df = st.session_state.eda_corr_df
+        if c_df is None or c_df.empty:
+            st.info("At least 2 numeric columns needed for correlation analysis.")
         else:
-            st.dataframe(corr_df.round(3), use_container_width=True)
+            st.dataframe(c_df.round(3), use_container_width=True)
 
-    # ── Downloads ────────────────────────────────────────────────────────────
+    # ── 10. Downloads ────────────────────────────────────────────────────────
     st.markdown(
-        "<hr style='border:0;border-top:1px solid #e4ebf6;margin:20px 0 12px'>",
+        "<hr style='border:0;border-top:1px solid #e4ebf6;margin:18px 0 10px'>",
         unsafe_allow_html=True,
     )
     st.markdown("<div class='sec-title'>⬇️ Downloads</div>", unsafe_allow_html=True)
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
-        csv_buf = _build_eda_csv()
-        st.download_button(
-            "📄 EDA Summary (CSV)",
-            data=csv_buf, file_name="eda_summary.csv", mime="text/csv",
-            use_container_width=True,
-        )
+        st.download_button("📄 EDA Summary (CSV)", data=_build_eda_csv(),
+                           file_name="eda_summary.csv", mime="text/csv",
+                           use_container_width=True)
     with dl2:
-        report_buf = _build_report_text(st.session_state.filename)
-        st.download_button(
-            "📋 EDA Report (TXT)",
-            data=report_buf, file_name="eda_report.txt", mime="text/plain",
-            use_container_width=True,
-        )
+        st.download_button("📋 EDA Report (TXT)",
+                           data=_build_report_text(st.session_state.filename),
+                           file_name="eda_report.txt", mime="text/plain",
+                           use_container_width=True)
     with dl3:
         if df is not None:
             st.download_button(
                 "📊 Export Dataset (CSV)",
                 data=df.to_csv(index=False).encode("utf-8"),
                 file_name=f"cleaned_{st.session_state.filename or 'dataset.csv'}",
-                mime="text/csv",
-                use_container_width=True,
+                mime="text/csv", use_container_width=True,
             )
 
 
@@ -755,49 +841,57 @@ def _render_kpi_cards(kpis: list[dict]) -> None:
 
 
 def _render_chart_cards(charts: list[dict]) -> None:
-    """Render charts in 2-column grid; each card has a Delete button."""
-    # Work on a copy so deletion during iteration is safe
+    """Render charts in 2-column grid; each card has an individual Remove button."""
     current = list(charts)
     pairs = [current[i:i + 2] for i in range(0, len(current), 2)]
     deleted_ids: list[str] = []
 
     for pair in pairs:
         cols_layout = st.columns(len(pair))
-        for col_widget, chart_item in zip(cols_layout, pair):
+        for col_widget, item in zip(cols_layout, pair):
             with col_widget:
-                cid = chart_item["id"]
-                title = chart_item.get("title", "Chart")
-                desc = chart_item.get("desc", "")
-                section = chart_item.get("section", "")
+                cid     = item["id"]
+                title   = item.get("title", "Chart")
+                desc    = item.get("desc", "")
+                section = item.get("section", "")
+                cols_used = item.get("cols_used", [])
 
-                # Card header with title + delete button
-                c_head, c_del = st.columns([5, 1])
-                with c_head:
-                    st.markdown(
-                        f"<div class='chart-head'>"
-                        f"<div><div class='chart-title'>{title}</div>"
-                        f"<div class='chart-desc'>{desc}</div></div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                with c_del:
-                    if st.button("✕", key=f"del_{cid}", help="Remove this chart",
-                                 use_container_width=True):
-                        deleted_ids.append(cid)
+                # Card border via container + CSS class
+                with st.container():
+                    # Header row: title + delete button
+                    th, td = st.columns([5, 1])
+                    with th:
+                        cols_label = " · ".join(cols_used) if cols_used else ""
+                        st.markdown(
+                            f"<div class='chart-head'>"
+                            f"<div class='chart-title'>{title}</div>"
+                            f"<div class='chart-desc'>{desc}</div>"
+                            + (f"<div style='font-size:10px;color:#aab8cc;margin-top:3px'>"
+                               f"Columns: {cols_label}</div>" if cols_label else "")
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    with td:
+                        if st.button("✕", key=f"del_{cid}", help="Remove this chart",
+                                     use_container_width=True):
+                            deleted_ids.append(cid)
 
-                # Render the Altair chart
-                try:
-                    c = chart_item["chart"]
-                    if section != "donut":
-                        c = c.configure_axis(
-                            labelFontSize=10, titleFontSize=11,
-                            labelColor="#52698e", titleColor="#14264a",
-                        ).configure_title(
-                            fontSize=13, fontWeight=700, color="#14264a", anchor="start",
-                        ).configure_legend(labelFontSize=10, titleFontSize=10)
-                    st.altair_chart(c, use_container_width=True)
-                except Exception as exc:
-                    st.caption(f"Chart unavailable: {exc}")
+                    # Chart rendering
+                    try:
+                        c = item["chart"]
+                        if section not in ("donut", "corr"):
+                            c = c.configure_axis(
+                                labelFontSize=10, titleFontSize=11,
+                                labelColor="#52698e", titleColor="#14264a",
+                            ).configure_title(
+                                fontSize=13, fontWeight=700,
+                                color="#14264a", anchor="start",
+                            ).configure_legend(
+                                labelFontSize=10, titleFontSize=10,
+                            )
+                        st.altair_chart(c, use_container_width=True)
+                    except Exception as exc:
+                        st.caption(f"Chart unavailable: {exc}")
 
     # Apply deletions and rerun if any chart was removed
     if deleted_ids:
