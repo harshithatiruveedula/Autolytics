@@ -4,14 +4,20 @@
    Python renders the analytics content beside it to avoid nested page layouts. */
 .layout{width:100%;max-width:100%;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:calc(100vh - 2px);background:var(--bg);border-radius:12px;overflow:hidden}
 .layout.eda-mode{grid-template-columns:188px minmax(0,1fr);min-height:100vh;height:100vh;overflow:hidden;border-radius:0;background:var(--bg)}
+.layout.eda-mode.is-collapsed{grid-template-columns:64px minmax(0,1fr)}
 .sidebar{background:linear-gradient(180deg,#0b1b38,#0c2147);color:white;display:flex;flex-direction:column;padding:18px 8px;min-height:calc(100vh - 2px)}
 .layout.eda-mode .sidebar{min-height:100vh;height:100vh;padding:14px 8px;position:relative}
 .eda-nav-toggle{width:100%;height:34px;border:1px solid #2d4772;background:#10294f;color:#dce8ff;border-radius:7px;cursor:pointer;margin-bottom:14px;font-size:16px}
 .eda-nav-toggle:hover{background:#1b3a6b}
-.layout.eda-mode .sidebar-collapsed{padding:14px 6px}
+.layout.eda-mode .sidebar-collapsed{width:64px;min-width:64px;padding:14px 6px;overflow:hidden}
+.layout.eda-mode .sidebar-collapsed .eda-nav-toggle{width:50px;min-width:50px;padding:0}
+.layout.eda-mode .sidebar-collapsed .nav{width:50px;min-width:50px;min-height:42px;box-sizing:border-box}
+.layout.eda-mode .sidebar-collapsed .navicon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 20px}
+.layout.eda-mode .sidebar-collapsed .nav.active::before{inset:-90%}
 .layout.eda-mode .sidebar-collapsed .brand{justify-content:center;padding:0 0 24px}
 .layout.eda-mode .sidebar-collapsed .brand>div:last-child{display:none}
-.layout.eda-mode .sidebar-collapsed .nav{justify-content:center;padding:12px 3px;gap:0;font-size:0}
+.layout.eda-mode .sidebar-collapsed .nav{justify-content:center;padding:10px 3px;gap:0;font-size:0}
+.layout.eda-mode .sidebar-collapsed .navlabel{display:none}
 .layout.eda-mode .sidebar-collapsed .navicon{font-size:19px;width:auto}
 .layout.eda-mode .sidebar-collapsed .quote{display:none}
 .layout.eda-mode .brand{gap:8px;padding:0 5px 27px}.layout.eda-mode .mark{width:34px;height:34px;border-radius:8px;font-size:19px}.layout.eda-mode .brandname{font-size:14px}.layout.eda-mode .tagline{font-size:9px}.layout.eda-mode .nav{font-size:12px;padding:11px 8px;gap:9px}.layout.eda-mode .quote{font-size:11px;padding:20px 6px 8px}
@@ -121,7 +127,7 @@ function navItem(label,key,icon){
   const active=args.nav===key||(key==='home'&&isHomePage(args.nav)&&args.nav!=='upload'&&args.nav!=='query')
                ?args.nav===key:args.nav===key;
   const busy=state.busyQuery&&key==='query';
-  return `<div class="nav ${args.nav===key?'active':''} ${busy?'busy':''}" data-nav="${key}"><span class="navicon">${icon}</span>${label}</div>`;
+  return `<div class="nav ${args.nav===key?'active':''} ${busy?'busy':''}" data-nav="${key}" title="${label}"><span class="navicon" aria-hidden="true">${icon}</span><span class="navlabel">${label}</span></div>`;
 }
 
 /* ── Upload status ───────────────────────────────────────────────────── */
@@ -190,7 +196,8 @@ function renderEda(){
   // Keep the custom AUTOLYTICS navigation visible while the Streamlit-native
   // EDA dashboard renders in the parent page. The iframe is fixed to the
   // sidebar width by app.py, so this shell must not render duplicate content.
-  return `<div class="layout eda-mode">${sidebar()}<main class="main" aria-hidden="true"></main></div>`;
+  const collapsed = !!args.sidebar_collapsed && (args.nav||'home') === 'eda';
+  return `<div class="layout eda-mode ${collapsed ? 'is-collapsed' : ''}">${sidebar()}<main class="main" aria-hidden="true"></main></div>`;
 }
 
 /* ── Home page (upload + dataset preview + query — all on one page) ──── */

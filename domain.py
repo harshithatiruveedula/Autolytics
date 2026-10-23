@@ -443,8 +443,19 @@ def plan_hospital_charts(df: pd.DataFrame,
             "cols": [c_age_grp, c_cond],
         })
 
-    # 11. Admission Type × Length of Stay
+    # Admission Type × Medical Condition is a core operational comparison.
+    # Keep it near the top so it is not dropped by the chart limit.
     c_adm_type = safe("admission_type", 2, 10)
+    if c_cond and c_adm_type:
+        candidates.append({
+            "priority": 2.5,
+            "title": "Admission Type by Medical Condition",
+            "desc": f"Record counts for each admission type within each {c_cond}.",
+            "kind": "cat_cat",
+            "cols": [c_cond, c_adm_type],
+        })
+
+    # 11. Admission Type × Length of Stay
     c_los      = safe("los", numeric=True)
     if c_adm_type and c_los:
         candidates.append({

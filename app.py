@@ -61,7 +61,9 @@ iframe[title="autolytics_workspace"]{ border:0!important; }
                box-shadow:0 2px 8px rgba(25,51,95,.035)!important;}
 [data-testid="stVerticalBlockBorderWrapper"] > div{padding:10px 12px 7px!important;}
 [data-testid="stElementContainer"]{min-width:0!important;}
-[data-testid="stAltairChart"]{width:100%!important;min-width:0!important;}
+[data-testid="stAltairChart"]{width:100%!important;min-width:0!important;overflow:visible!important;}
+[data-testid="stAltairChart"] > div{width:100%!important;min-width:0!important;}
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stHorizontalBlock"]{gap:.35rem!important;}
 [data-testid="stAltairChart"] canvas,[data-testid="stAltairChart"] svg{max-width:100%!important;}
 @media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:520px){.kpi-grid{grid-template-columns:1fr;}}
@@ -323,7 +325,9 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
                 alt.Chart(agg).mark_bar()
                 .encode(
                     alt.Y(f"{ca}:N", sort="-x", title=ca,
-                          axis=alt.Axis(labelLimit=220, labelOverlap=False)),
+                          scale=alt.Scale(paddingInner=0.10, paddingOuter=0.04),
+                          axis=alt.Axis(labelLimit=220, labelOverlap="greedy",
+                                        labelFontSize=11, tickSize=0)),
                     alt.X("count:Q", title="Record Count"),
                     alt.Color(f"{cb}:N", scale=alt.Scale(range=_PALETTE),
                               legend=alt.Legend(title=cb, labelLimit=180,
@@ -332,7 +336,7 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
                     tooltip=[f"{ca}:N", f"{cb}:N",
                              alt.Tooltip("count:Q", title="Count")],
                 )
-                .properties(title=title, height=h)
+                .properties(title=title, height=max(340, len(top_a) * 52))
             )
 
         elif kind in ("cat_num_box", "catbox"):
@@ -400,18 +404,35 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
                 tooltip_title = axis_title
             agg = s.groupby("_p").size().reset_index(name="count")
             agg.columns = ["period", "count"]
+            if span_days >= 730:
+                # Annual periods are discrete categories, not temporal ticks.
+                # This prevents Vega-Lite from emitting duplicate year labels
+                # when the browser/container is resized.
+                agg["period"] = pd.to_datetime(agg["period"]).dt.year.astype(str)
+                years = sorted(agg["period"].unique(), key=int)
+                x_encoding = alt.X(
+                    "period:O", title="Year", sort=years,
+                    axis=alt.Axis(labelAngle=0, labelOverlap="greedy",
+                                  labelLimit=70),
+                )
+                period_tooltip = alt.Tooltip("period:N", title="Year")
+            else:
+                x_encoding = alt.X(
+                    "period:T", title=axis_title,
+                    axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                  labelOverlap="greedy", labelLimit=100, tickCount=6),
+                )
+                period_tooltip = alt.Tooltip("period:T", title=tooltip_title,
+                                             format=axis_format)
             chart_obj = (
                 alt.Chart(agg).mark_line(point=True, color=_PALETTE[0])
                 .encode(
-                    alt.X("period:T", title=axis_title,
-                          axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
-                                        labelOverlap=False, labelLimit=100)),
+                    x_encoding,
                     alt.Y("count:Q", title="Patient Count"),
-                    tooltip=[alt.Tooltip("period:T", title=tooltip_title,
-                                         format=axis_format),
+                    tooltip=[period_tooltip,
                              alt.Tooltip("count:Q", title="Admissions")],
                 )
-                .properties(title=title, height=280)
+                .properties(title=title, height=300)
             )
 
         elif kind == "timeseries_cat":
@@ -435,21 +456,34 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
                 axis_angle = -40 if multi_year else 0
             agg = s.groupby(["_p", cat_col]).size().reset_index(name="count")
             agg.columns = ["period", cat_col, "count"]
+            if span_days >= 730:
+                agg["period"] = pd.to_datetime(agg["period"]).dt.year.astype(str)
+                years = sorted(agg["period"].unique(), key=int)
+                x_encoding = alt.X(
+                    "period:O", title="Year", sort=years,
+                    axis=alt.Axis(labelAngle=0, labelOverlap="greedy", labelLimit=70),
+                )
+                period_tooltip = alt.Tooltip("period:N", title="Year")
+            else:
+                x_encoding = alt.X(
+                    "period:T", title=axis_title,
+                    axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                  labelOverlap="greedy", labelLimit=100, tickCount=6),
+                )
+                period_tooltip = alt.Tooltip("period:T", title=axis_title,
+                                             format=axis_format)
             chart_obj = (
                 alt.Chart(agg).mark_line(point=True)
                 .encode(
-                    alt.X("period:T", title=axis_title,
-                          axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
-                                        labelOverlap=False, labelLimit=100)),
+                    x_encoding,
                     alt.Y("count:Q", title="Record Count"),
                     alt.Color(f"{cat_col}:N", scale=alt.Scale(range=_PALETTE),
                               legend=alt.Legend(title=cat_col, labelLimit=160,
                                                 orient="bottom", columns=3)),
-                    tooltip=[alt.Tooltip("period:T", title=axis_title,
-                                         format=axis_format), f"{cat_col}:N",
+                    tooltip=[period_tooltip, f"{cat_col}:N",
                              alt.Tooltip("count:Q", title="Count")],
                 )
-                .properties(title=title, height=280)
+                .properties(title=title, height=320)
             )
 
         elif kind == "scatter":
@@ -725,7 +759,7 @@ def _render_chart_cards(charts: list[dict]) -> None:
     deleted: list[str] = []
     for idx in range(0, len(charts), 2):
         items = charts[idx:idx + 2]
-        cols = st.columns([1.25, 1.0][:len(items)], gap="medium")
+        cols = st.columns([1, 1][:len(items)], gap="medium")
         for col_w, item in zip(cols, items):
             with col_w:
                 cid = item.get("id", str(uuid.uuid4()))
@@ -755,13 +789,15 @@ def _render_chart_cards(charts: list[dict]) -> None:
                         # Explicit responsive sizing prevents Altair's default
                         # width from overflowing narrow Streamlit columns.
                         chart = chart.properties(width="container")
-                        needs_cfg = kind not in ("donut", "corr", "cat_cat")
+                        needs_cfg = kind not in ("donut", "corr")
                         if needs_cfg:
                             chart = (chart
                                 .configure_axis(labelFontSize=10, titleFontSize=11,
                                                 labelColor="#52698e", titleColor="#14264a",
                                                 gridColor="#edf2fa", labelLimit=220)
-                                .configure_legend(labelFontSize=10, titleFontSize=10))
+                                .configure_legend(labelFontSize=10, titleFontSize=10,
+                                                  symbolSize=95, padding=8)
+                                .configure_view(strokeOpacity=0))
                         st.altair_chart(chart, use_container_width=True)
                     except Exception as exc:
                         st.warning(f"Unable to render this chart: {exc}")

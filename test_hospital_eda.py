@@ -47,6 +47,21 @@ class HospitalEdaTests(unittest.TestCase):
         self.assertIn("Patient Distribution by Gender", titles)
         self.assertIn("Age Distribution", titles)
 
+    def test_admission_type_by_condition_is_planned_when_available(self):
+        df = self.df.copy()
+        df["Admission Type"] = np.random.default_rng(2).choice(
+            ["Emergency", "Urgent", "Elective"], len(df)
+        )
+        result = detect_domain(df)
+        plan = plan_hospital_charts(df, result["mappings"], max_charts=10)
+        chart = next(
+            (item for item in plan
+             if item["title"] == "Admission Type by Medical Condition"),
+            None,
+        )
+        self.assertIsNotNone(chart)
+        self.assertEqual(chart["cols"], ["Diagnosis", "Admission Type"])
+
     def test_gender_chart_skipped_without_gender_field(self):
         df = self.df.drop(columns=["Sex"])
         result = detect_domain(df)
@@ -61,7 +76,9 @@ class HospitalEdaTests(unittest.TestCase):
         result = detect_domain(df)
         self.assertTrue(result["is_healthcare"])
         plan = plan_hospital_charts(df, result["mappings"], max_charts=10)
-        self.assertIn("Patient Distribution by Gender", {x["title"] for x in plan})
+        titles = {x["title"] for x in plan}
+        self.assertIn("Patient Distribution by Gender", titles)
+        self.assertIn("Admission Type by Medical Condition", titles)
 
 if __name__ == "__main__":
     unittest.main()
