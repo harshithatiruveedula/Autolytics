@@ -312,31 +312,40 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
             s = df[[ca, cb]].dropna().copy()
             if len(s) < _MIN:
                 return None
-            top_a = s[ca].value_counts().head(12).index.tolist()
-            top_b = s[cb].value_counts().head(8).index.tolist()
+            # Limit high-cardinality data without excluding the common clinical
+            # categories; then rename fields to stable aliases so columns with
+            # spaces, punctuation, or unusual names render reliably in Altair.
+            top_a = s[ca].astype(str).value_counts().head(12).index.tolist()
+            top_b = s[cb].astype(str).value_counts().head(10).index.tolist()
+            s[ca] = s[ca].astype(str)
+            s[cb] = s[cb].astype(str)
             s = s[s[ca].isin(top_a) & s[cb].isin(top_b)]
             if len(s) < _MIN:
                 return None
-            agg = s.groupby([ca, cb]).size().reset_index(name="count")
+            agg = s.groupby([ca, cb], observed=True).size().reset_index(name="count")
+            agg = agg.rename(columns={ca: "category_label", cb: "series_label"})
+            category_order = (agg.groupby("category_label")["count"].sum()
+                                .sort_values(ascending=False).index.tolist())
             # Horizontal stacked bars preserve every category label in narrow
             # cards and make the full category list readable without clipping.
-            h = min(520, max(260, len(top_a) * 34))
             chart_obj = (
                 alt.Chart(agg).mark_bar()
                 .encode(
-                    alt.Y(f"{ca}:N", sort="-x", title=ca,
-                          scale=alt.Scale(paddingInner=0.10, paddingOuter=0.04),
-                          axis=alt.Axis(labelLimit=220, labelOverlap="greedy",
+                    alt.Y("category_label:N", sort=category_order,
+                          title=ca,
+                          scale=alt.Scale(paddingInner=0.18, paddingOuter=0.08),
+                          axis=alt.Axis(labelLimit=240, labelOverlap=False,
                                         labelFontSize=11, tickSize=0)),
                     alt.X("count:Q", title="Record Count"),
-                    alt.Color(f"{cb}:N", scale=alt.Scale(range=_PALETTE),
+                    alt.Color("series_label:N", scale=alt.Scale(range=_PALETTE),
                               legend=alt.Legend(title=cb, labelLimit=180,
                                                 orient="bottom", columns=3)),
-                    alt.Order(f"{cb}:N"),
-                    tooltip=[f"{ca}:N", f"{cb}:N",
+                    alt.Order("series_label:N"),
+                    tooltip=[alt.Tooltip("category_label:N", title=ca),
+                             alt.Tooltip("series_label:N", title=cb),
                              alt.Tooltip("count:Q", title="Count")],
                 )
-                .properties(title=title, height=max(340, len(top_a) * 52))
+                .properties(title=title, height=max(320, len(category_order) * 48))
             )
 
         elif kind in ("cat_num_box", "catbox"):
@@ -578,11 +587,53 @@ def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
     charts: list[dict] = []
 
     if domain["is_healthcare"]:
-        plan = plan_hospital_charts(df, mappings, max_charts=10)
-        for spec in plan:
+        plan = plan_hospital_charts(df, mappings, max_charts=14)
+        # Build the core admission chart first so optional plots cannot push it
+        # out of the visible chart set.
+        admission_specs = [s for s in plan if s.get("title") == "Admission Type by Medical Condition"]
+        ordered_specs = admission_specs + [s for s in plan if s not in admission_specs]
+        for spec in ordered_specs:
             result = _make_chart(df, spec)
             if result is not None:
                 charts.append(result)
+
+        # Be resilient to unfamiliar healthcare schemas: if semantic planning
+        # yields too few charts, add valid generic charts from the actual data
+        # types rather than leaving the page nearly empty.
+        if len(charts) < 4:
+            from eda import classify_columns
+            info = classify_columns(df)
+            existing_cols = {c for chart in charts for c in chart.get("cols_used", [])}
+            fallback_specs = []
+            for date_col in info.get("datetime", [])[:2]:
+                if date_col not in existing_cols:
+                    fallback_specs.append({"kind": "timeseries_count", "title": f"Records over Time — {date_col}",
+                                           "desc": f"Record counts aggregated over time using {date_col}.", "cols": [date_col]})
+            for cat_col in info.get("categorical", []):
+                if cat_col in existing_cols:
+                    continue
+                nunique = df[cat_col].nunique(dropna=True)
+                if 2 <= nunique <= 20:
+                    fallback_specs.append({"kind": "bar", "title": f"Distribution of {cat_col}",
+                                           "desc": f"Record count by {cat_col} category.", "cols": [cat_col]})
+                if len(fallback_specs) >= 8:
+                    break
+            for num_col in info.get("numeric", []):
+                if num_col not in existing_cols:
+                    fallback_specs.append({"kind": "histogram", "title": f"Distribution of {num_col}",
+                                           "desc": f"Distribution of values in {num_col}.", "cols": [num_col]})
+                if len(fallback_specs) >= 10:
+                    break
+            known_titles = {c["title"] for c in charts}
+            for spec in fallback_specs:
+                if len(charts) >= 14:
+                    break
+                if spec["title"] in known_titles:
+                    continue
+                result = _make_chart(df, spec)
+                if result is not None:
+                    charts.append(result)
+                    known_titles.add(spec["title"])
     else:
         # Generic auto planner for non-hospital datasets
         import altair as alt

@@ -24,12 +24,17 @@ _HC_SYNONYMS: dict[str, list[str]] = {
     "condition": [
         "medical condition", "condition", "diagnosis", "disease", "ailment",
         "illness", "disorder", "medical diagnosis", "chief complaint",
-        "primary diagnosis", "presenting complaint",
+        "primary diagnosis", "presenting complaint", "diagnosis description",
+        "diagnosis name", "primary condition", "health condition", "health issue",
+        "medical problem", "chief diagnosis", "dx", "dx code", "diagnosis code",
+        "icd code", "icd description", "reason for visit", "complaint", "symptom group",
     ],
     "medication": [
         "medication", "medicine", "drug", "prescription", "treatment",
         "drug name", "prescribed drug", "drug prescribed", "medicine name",
-        "therapy", "medication name",
+        "therapy", "medication name", "drug name", "drug type", "prescribed medication",
+        "prescribed drug", "pharmaceutical", "prescription name", "medication prescribed",
+        "treatment name", "medication category", "medicine prescribed",
     ],
     "department": [
         "department", "dept", "specialty", "speciality", "clinical unit",
@@ -41,11 +46,18 @@ _HC_SYNONYMS: dict[str, list[str]] = {
         "total charge", "total cost", "treatment cost", "medical cost", "bill amount", "medical bill",
         "healthcare cost", "medical expense", "expense", "total charges",
         "healthcare expenses", "fee", "total fee", "payment amount",
+        "amount billed", "billed amount", "total bill", "total billing", "claim amount",
+        "amount paid", "medical charges", "hospital charges", "treatment expenses",
+        "treatment expenses", "healthcare expenditure", "reimbursement", "claim cost",
+        "total amount", "expense amount", "cost of care", "cost of treatment",
     ],
     "admission_date": [
         "date of admission", "admission date", "admit date", "admitted",
         "date admitted", "arrival date", "admission", "admitdate",
-        "date_admitted", "date_of_admission",
+        "date_admitted", "date_of_admission", "admit dt", "admission dt", "admit datetime",
+        "admission timestamp", "encounter date", "encounter datetime", "encounter timestamp",
+        "visit date", "visit timestamp", "date of visit", "check in date", "checkin date",
+        "arrival datetime", "start of care", "admit time", "arrival date time",
     ],
     "discharge_date": [
         "date of discharge", "discharge date", "discharged", "date discharged",
@@ -53,27 +65,32 @@ _HC_SYNONYMS: dict[str, list[str]] = {
     ],
     "blood_type": [
         "blood type", "blood group", "blood", "bloodtype", "blood_type",
-        "blood_group",
+        "blood_group", "abo group", "abo blood group", "blood group type",
     ],
     "test_result": [
         "test results", "test result", "lab results", "lab result",
         "test outcome", "examination outcome", "lab outcome", "test",
-        "results", "test_result", "lab_result",
+        "results", "test_result", "lab_result", "lab flag", "lab finding",
+        "diagnostic result", "test status", "screening result", "pathology result",
     ],
     "age": [
-        "age", "patient age", "age years", "age_years",
+        "age", "patient age", "age years", "age_years", "age at admission",
+        "age at visit", "age in years", "years old", "patient age years", "age numeric",
     ],
     "age_group": [
         "age group", "age_group", "age bracket", "age category",
         "patient age group",
     ],
     "gender": [
-        "gender", "sex", "patient gender", "patient sex",
+        "gender", "sex", "patient gender", "patient sex", "sex at birth",
+        "gender code", "sex code", "patient sex code", "biological sex",
     ],
     "los": [
         "length of stay", "los", "stay duration", "hospital stay",
         "stay", "days stayed", "days in hospital", "length_of_stay",
         "lengthofstay", "hospital stay duration", "hospital stay duration days",
+        "inpatient days", "days admitted", "days hospitalized", "hospital days",
+        "stay length days", "duration of hospitalization", "admission duration",
     ],
     "waiting_time": [
         "waiting time", "wait time", "queue time", "wait duration",
@@ -103,7 +120,11 @@ _HC_SYNONYMS: dict[str, list[str]] = {
     ],
     "admission_type": [
         "admission type", "visit type", "encounter type", "type of admission",
-        "admission_type",
+        "admission category", "visit category", "care setting", "admission class",
+        "patient admission type", "admission_type", "encounter class", "encounter category",
+        "visit class", "visit category", "patient class", "admission mode", "arrival mode",
+        "care type", "service type", "inpatient outpatient", "inpatient outpatient status",
+        "admit type", "admittype", "encounter type code", "patient type",
     ],
     "patient_id": [
         "patient id", "patient identifier", "patient number", "patient_id",
@@ -124,10 +145,13 @@ _HC_SYNONYMS: dict[str, list[str]] = {
 
 # Concepts that indicate the dataset is healthcare-related
 _HC_INDICATOR_CONCEPTS = {
+    # Include patient demographics and care-provider/facility fields so common
+    # compact patient datasets (e.g. Age + Sex + Diagnosis) are recognised too.
     "condition", "medication", "department", "billing", "admission_date",
     "discharge_date", "blood_type", "test_result", "los", "waiting_time",
     "satisfaction", "risk_level", "discharge_status", "readmission",
-    "insurance", "admission_type", "patient_id",
+    "insurance", "admission_type", "patient_id", "age", "age_group", "gender",
+    "doctor", "hospital", "room",
 }
 
 # Minimum number of indicator concepts needed to flag a dataset as healthcare
@@ -138,7 +162,7 @@ _HC_MIN_CONCEPTS = 3
 _NON_ID_CONCEPTS = {
     "condition", "medication", "department", "blood_type", "test_result",
     "age_group", "gender", "risk_level", "discharge_status", "readmission",
-    "insurance", "admission_type",
+    "insurance", "admission_type", "age", "age_group",
 }
 
 
@@ -185,6 +209,74 @@ def _concept_score(col_norm: str, synonyms: list[str]) -> float:
     return best
 
 
+_VALUE_SIGNATURES: dict[str, set[str]] = {
+    "gender": {"male", "female", "m", "f", "man", "woman", "nonbinary", "non binary", "other", "unknown"},
+    "blood_type": {"a+", "a-", "b+", "b-", "ab+", "ab-", "o+", "o-"},
+    "test_result": {"normal", "abnormal", "inconclusive", "positive", "negative", "detected", "not detected", "reactive", "non reactive", "high", "low", "borderline"},
+    "admission_type": {"emergency", "urgent", "elective", "routine", "planned", "inpatient", "outpatient", "observation", "trauma", "direct", "transfer", "referral", "ambulatory", "walk in", "scheduled"},
+    "discharge_status": {"discharged", "transferred", "deceased", "expired", "home", "against medical advice", "ama", "rehabilitation", "skilled nursing", "improved", "stable"},
+    "readmission": {"readmitted", "readmission", "yes", "no", "true", "false", "1", "0"},
+    "risk_level": {"low", "moderate", "medium", "high", "critical", "severe", "mild"},
+    "medication": {"aspirin", "ibuprofen", "paracetamol", "acetaminophen", "metformin", "amoxicillin", "atorvastatin", "lisinopril", "omeprazole", "insulin", "penicillin", "lipitor", "warfarin", "naproxen", "albuterol", "salbutamol", "amlodipine", "losartan", "simvastatin", "azithromycin"},
+    "department": {"cardiology", "oncology", "neurology", "pediatrics", "paediatrics", "emergency", "radiology", "orthopedics", "orthopaedics", "dermatology", "psychiatry", "icu", "intensive care", "general medicine", "surgery", "gynecology", "gynaecology", "nephrology", "urology", "gastroenterology"},
+    "insurance": {"medicare", "medicaid", "blue cross", "blue shield", "aetna", "cigna", "unitedhealthcare", "united healthcare", "humana", "kaiser permanente", "anthem", "self pay", "self-pay", "private insurance"},
+}
+
+_COMMON_CONDITIONS = {
+    "asthma", "cancer", "diabetes", "hypertension", "arthritis", "obesity",
+    "pneumonia", "copd", "heart disease", "coronary artery disease", "stroke",
+    "kidney disease", "chronic kidney disease", "heart failure", "migraine",
+    "depression", "anxiety", "infection", "fracture", "anemia", "epilepsy",
+    "bronchitis", "covid 19", "influenza", "tuberculosis", "thyroid disorder",
+}
+
+
+def _value_signature_score(series: pd.Series, concept: str) -> float:
+    """Infer a semantic role from values when the column name is unfamiliar.
+
+    Value inference is deliberately conservative: it only contributes a match
+    when a meaningful share of non-null sample values matches a known signature.
+    """
+    values = series.dropna()
+    if values.empty:
+        return 0.0
+    sample = values.astype(str).head(300).map(lambda x: _norm(x))
+    normalized = set(sample.unique())
+    if concept in _VALUE_SIGNATURES:
+        signature = _VALUE_SIGNATURES[concept]
+        hits = sum(v in signature or v.replace(" ", "") in {x.replace(" ", "") for x in signature} for v in sample)
+        ratio = hits / max(1, len(sample))
+        # Use the signature only when it describes most of the values, not a few coincidences.
+        if ratio >= 0.55:
+            return min(0.82, 0.58 + ratio * 0.24)
+    if concept == "condition":
+        hits = sum(v in _COMMON_CONDITIONS or any(term in v for term in ("disease", "syndrome", "disorder")) for v in sample)
+        ratio = hits / max(1, len(sample))
+        if ratio >= 0.45 and len(normalized) <= 100:
+            return min(0.78, 0.56 + ratio * 0.22)
+    if concept == "admission_date":
+        # Date-like values alone are weak evidence; this is used only for columns
+        # whose names also suggest visit/encounter/admit/start timing.
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return 0.0
+    return 0.0
+
+
+def _name_role_adjustment(col_norm: str, concept: str) -> float:
+    """Small semantic boosts for common abbreviations and unfamiliar schemas."""
+    compact = re.sub(r"[^a-z0-9]", "", col_norm)
+    patterns = {
+        "condition": (r"^(dx|dxcode|icd|icd10|diagnosiscode|primarydx)$",),
+        "admission_type": (r"^(admittype|encounterclass|encountercategory|visitclass|patientclass|admissionmode)$",),
+        "admission_date": (r"^(admitdt|admissiondt|encounterdate|visitdate|admitdatetime)$",),
+        "discharge_date": (r"^(dischargedt|dischargedate|releasedate)$",),
+        "gender": (r"^(sexcode|gendercode|patientsexcode)$",),
+        "billing": (r"^(billedamount|amountbilled|totalbill|claimamount|amountpaid|medicalcharges)$",),
+        "age": (r"^(patientage|ageyears|ageatadmission|ageatvisit)$",),
+    }
+    return 0.93 if any(re.match(p, compact) for p in patterns.get(concept, ())) else 0.0
+
+
 def map_columns(df: pd.DataFrame,
                 min_confidence: float = 0.55) -> dict[str, dict[str, Any]]:
     """Return a mapping from concept → {col, confidence, col_name}.
@@ -205,8 +297,21 @@ def map_columns(df: pd.DataFrame,
         series = df[col]
 
         for concept, synonyms in _HC_SYNONYMS.items():
-            score = _concept_score(col_norm, synonyms)
+            name_score = max(_concept_score(col_norm, synonyms), _name_role_adjustment(col_norm, concept))
+            value_score = _value_signature_score(series, concept)
+            score = max(name_score, value_score)
+            # Value-only inference must not map generic numeric/identifier columns
+            # to roles that require semantic evidence in the name.
+            if value_score and not name_score:
+                if concept in ("billing", "age", "los", "waiting_time", "satisfaction", "admission_date", "discharge_date", "patient_id", "doctor", "hospital", "room", "department", "medication", "insurance"):
+                    score = 0.0
             if score < min_confidence:
+                continue
+            # A numeric "Patient Age" column must map to age, not age_group.
+            # Require explicit group/bracket/category wording for age_group.
+            if concept == "age_group" and not any(
+                token in col_norm.split() for token in ("group", "bracket", "category", "band")
+            ):
                 continue
 
             # Guard: skip if column is an identifier and concept is not a
@@ -236,7 +341,7 @@ def map_columns(df: pd.DataFrame,
 
             # Categorical-only concepts: skip pure-numeric columns
             if concept in ("condition", "medication", "department", "blood_type",
-                           "test_result", "gender", "risk_level", "discharge_status",
+                           "test_result", "gender", "age_group", "risk_level", "discharge_status",
                            "readmission", "insurance", "admission_type"):
                 if pd.api.types.is_numeric_dtype(series):
                     # allow low-cardinality numerics that could be encoded categories
@@ -254,7 +359,19 @@ def map_columns(df: pd.DataFrame,
                     "confidence": round(score, 3),
                 }
 
-    return best_match
+    # A single physical column should not be assigned to multiple concepts.
+    # This matters when an unfamiliar column name is inferred from its values
+    # (for example, "field_4" containing Male/Female could otherwise look like
+    # both gender and admission type because some value vocabularies overlap).
+    by_column: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for concept, match in best_match.items():
+        by_column.setdefault(str(match["col"]), []).append((concept, match))
+    resolved: dict[str, dict[str, Any]] = {}
+    for _, matches in by_column.items():
+        # Keep the strongest evidence. Stable insertion order breaks exact ties.
+        concept, match = max(matches, key=lambda item: item[1]["confidence"])
+        resolved[concept] = match
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -444,16 +561,19 @@ def plan_hospital_charts(df: pd.DataFrame,
         })
 
     # Admission Type × Medical Condition is a core operational comparison.
-    # Keep it near the top so it is not dropped by the chart limit.
-    c_adm_type = safe("admission_type", 2, 10)
-    if c_cond and c_adm_type:
-        candidates.append({
-            "priority": 2.5,
+    # It is inserted at the very top and also explicitly protected by the
+    # final selection logic below so it cannot be crowded out by optional plots.
+    c_adm_type = safe("admission_type", 2, 30)
+    admission_condition_spec = None
+    if c_cond and c_adm_type and c_cond != c_adm_type:
+        admission_condition_spec = {
+            "priority": 0,
             "title": "Admission Type by Medical Condition",
             "desc": f"Record counts for each admission type within each {c_cond}.",
             "kind": "cat_cat",
             "cols": [c_cond, c_adm_type],
-        })
+        }
+        candidates.append(admission_condition_spec)
 
     # 11. Admission Type × Length of Stay
     c_los      = safe("los", numeric=True)
@@ -556,7 +676,8 @@ def plan_hospital_charts(df: pd.DataFrame,
     # ── Pick top N by priority ───────────────────────────────────────────────
     candidates.sort(key=lambda x: x["priority"])
 
-    # De-duplicate by col sets (same pair shouldn't appear twice)
+    # De-duplicate by col sets (same pair shouldn't appear twice), but protect
+    # the required Admission Type × Condition chart from being dropped.
     seen_col_sets: list[frozenset] = []
     result: list[dict] = []
     for spec in candidates:
@@ -565,7 +686,10 @@ def plan_hospital_charts(df: pd.DataFrame,
             continue
         seen_col_sets.append(col_set)
         result.append(spec)
-        if len(result) >= max_charts:
-            break
 
-    return result
+    # A health dataset can have many possible charts. Always retain the core
+    # admission comparison, even when a caller requests a small chart limit.
+    if admission_condition_spec is not None:
+        result = [x for x in result if x["title"] != admission_condition_spec["title"]]
+        result.insert(0, admission_condition_spec)
+    return result[:max(1, max_charts)]
