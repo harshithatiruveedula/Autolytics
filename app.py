@@ -1036,11 +1036,20 @@ def main():
     # but we collapse it to zero visible height with CSS and only render
     # it with height=0 so no blank space is injected above the EDA content.
     if nav == "eda":
-        # Hide the iframe completely on the EDA page so it contributes 0 height.
+        # On the EDA page all content is rendered by Streamlit below this point.
+        # We must still instantiate the component so nav-click events are processed,
+        # but it must occupy ZERO layout space.  display:none removes it from flow;
+        # the companion height:1 message in index.html ensures Streamlit allocates
+        # no vertical space for the component wrapper either.
         st.markdown(
-            "<style>iframe[title='autolytics_workspace']"
-            "{height:0!important;min-height:0!important;max-height:0!important;"
-            "overflow:hidden!important;display:block!important;}</style>",
+            "<style>"
+            "iframe[title='autolytics_workspace']{"
+            "display:none!important;height:0!important;}"
+            # Also collapse the Streamlit-generated wrapper divs around the component
+            "[data-testid='stCustomComponentV1']{"
+            "height:0!important;min-height:0!important;"
+            "padding:0!important;margin:0!important;overflow:hidden!important;}"
+            "</style>",
             unsafe_allow_html=True,
         )
         event = _workspace(
@@ -1050,7 +1059,6 @@ def main():
         )
         if event and process_event(event):
             st.rerun()
-        # Render EDA content directly — no container that adds padding/height
         _render_eda_page()
         return
 

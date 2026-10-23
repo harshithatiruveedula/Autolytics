@@ -317,9 +317,11 @@ function render(){
   const nav=args.nav||'home';
 
   if(nav==='eda'){
+    // On the EDA page Python renders all content below this iframe.
+    // Report height=1 so Streamlit allocates no space for the component.
     root.innerHTML=renderEda();
     bindCommon();
-    height();
+    window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
     return;
   }
   if(nav==='modeling'||nav==='reports'){
@@ -438,8 +440,7 @@ window.addEventListener('message',e=>{
   if(args.eda_has_result||args.eda_error)state.busyEda=false;
   render();
   // Re-apply scroll/highlight after a Streamlit rerun restores the same nav
-  const nav=args.nav||'home';
-  if(nav==='upload'||nav==='query'){
+  const nav=args.nav||'home';  if(nav==='upload'||nav==='query'){
     const sectionId=nav==='upload'?'uploadSection':'querySection';
     requestAnimationFrame(()=>scrollToSection(sectionId));
     setTimeout(()=>scrollToSection(sectionId),200);
