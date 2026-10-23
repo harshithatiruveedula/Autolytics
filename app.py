@@ -24,45 +24,44 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-[data-testid="stHeader"]           { height:0!important;visibility:hidden!important; }
-[data-testid="stToolbar"]          { right:0.5rem; }
+[data-testid="stHeader"]            { height:0!important;visibility:hidden!important; }
+[data-testid="stToolbar"]           { right:0.5rem; }
 [data-testid="stMainBlockContainer"]{ max-width:100%!important;padding:0!important; }
 [data-testid="stAppViewContainer"] > .main { padding-top:0!important; }
-[data-testid="stVerticalBlock"]    { gap:0!important; }
+[data-testid="stVerticalBlock"]     { gap:0!important; }
 iframe[title="autolytics_workspace"]{ width:100%!important;border:0!important; }
 
-/* ── EDA page chrome ─────────────────────────────────────────────────── */
-.kpi-grid  { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin:4px 0 16px; }
-.kpi-card  { background:#fff;border:1px solid #e4ebf6;border-radius:12px;padding:14px 16px;box-shadow:0 3px 12px rgba(25,51,95,.04); }
-.kpi-icon  { font-size:22px;margin-bottom:4px; }
-.kpi-label { font-size:10px;color:#7285a7;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px; }
-.kpi-value { font-size:20px;font-weight:850;color:#0b1c3a; }
-.kpi-sub   { font-size:10px;color:#94a3b8;margin-top:3px; }
-.sec-title { font-size:14px;font-weight:800;color:#14264a;margin:18px 0 8px;display:flex;align-items:center;gap:7px; }
-.insight-bar{background:linear-gradient(90deg,#eef4ff,#f5f7ff);border:1px solid #dde9ff;border-radius:9px;padding:9px 14px;font-size:12px;color:#3558a0;line-height:1.6;margin-bottom:6px;}
-.chart-card{ background:#fff;border:1px solid #e4ebf6;border-radius:12px;padding:14px 16px 10px;margin-bottom:0;box-shadow:0 3px 12px rgba(25,51,95,.04); }
-.chart-head{ display:flex;justify-content:space-between;align-items:center;margin-bottom:6px; }
-.chart-title{ font-size:13px;font-weight:750;color:#14264a; }
-.chart-desc { font-size:11px;color:#7285a7;margin-top:2px; }
+/* ── EDA page ────────────────────────────────────────────────────────────── */
+.kpi-grid  { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
+             gap:14px;margin:4px 0 20px; }
+.kpi-card  { background:#fff;border:1px solid #e4ebf6;border-radius:13px;
+             padding:16px 18px;box-shadow:0 4px 16px rgba(25,51,95,.05); }
+.kpi-icon  { font-size:24px;margin-bottom:6px; }
+.kpi-label { font-size:10px;color:#7285a7;font-weight:700;text-transform:uppercase;
+             letter-spacing:.04em;margin-bottom:3px; }
+.kpi-value { font-size:22px;font-weight:850;color:#0b1c3a; }
+.kpi-sub   { font-size:11px;color:#94a3b8;margin-top:4px; }
+.sec-head  { font-size:15px;font-weight:800;color:#14264a;margin:22px 0 10px;
+             display:flex;align-items:center;gap:8px; }
+.insight-bar { background:linear-gradient(90deg,#eef4ff,#f5f7ff);
+               border:1px solid #dde9ff;border-radius:9px;
+               padding:10px 15px;font-size:12px;color:#3558a0;
+               line-height:1.6;margin-bottom:7px; }
+.chart-card  { background:#fff;border:1px solid #e4ebf6;border-radius:13px;
+               padding:16px 18px 12px;box-shadow:0 4px 16px rgba(25,51,95,.05);
+               margin-bottom:16px; }
+.chart-title { font-size:13px;font-weight:800;color:#14264a; }
+.chart-desc  { font-size:11px;color:#7285a7;margin-top:2px; }
+.chart-cols  { font-size:10px;color:#b0bcd4;margin-top:3px; }
+.empty-charts{ background:#f7f9fd;border:1.5px dashed #c8d8f0;border-radius:12px;
+               padding:24px;text-align:center;color:#7285a7;font-size:13px;
+               margin:0 0 20px; }
 </style>
 """, unsafe_allow_html=True)
 
 _COMPONENT_DIR = Path(__file__).parent / "frontend"
 _workspace = components.declare_component("autolytics_workspace", path=str(_COMPONENT_DIR))
 NAV_PAGES = {"home", "upload", "query", "eda", "modeling", "reports"}
-
-# Chart-type display names and the section tags they map to
-_CHART_TYPE_OPTIONS = [
-    "Auto (recommended)",
-    "Histogram",
-    "Box Plot",
-    "Bar Chart",
-    "Donut / Pie Chart",
-    "Scatter Plot",
-    "Line / Time Series",
-    "Correlation Heatmap",
-    "Grouped Bar",
-]
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def init_state():
         "upload_error": None,
         "preview_page": 1,
         "last_event_id": None,
-        # EDA
+        # EDA base stats (computed once per dataset)
         "eda_kpis": None,
         "eda_insights": None,
         "eda_profile": None,
@@ -92,12 +91,11 @@ def init_state():
         "eda_corr_df": None,
         "eda_cols": None,
         "eda_dataset_id": None,
-        # per-chart list: [{"id": str, "title": str, "desc": str, "section": str, "chart": alt.Chart}]
+        # domain detection result
+        "eda_domain": None,
+        # generated charts: list[{id, title, desc, kind, cols_used, chart}]
         "eda_charts": None,
         "eda_error": None,
-        # user selections
-        "eda_selected_cols": None,
-        "eda_chart_type": "Auto (recommended)",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -125,7 +123,8 @@ def load_bytes(name: str, payload: bytes) -> pd.DataFrame:
             try:
                 return pd.read_csv(BytesIO(payload), low_memory=False, engine="c")
             except UnicodeDecodeError:
-                return pd.read_csv(BytesIO(payload), encoding="latin-1", low_memory=False, engine="c")
+                return pd.read_csv(BytesIO(payload), encoding="latin-1",
+                                   low_memory=False, engine="c")
         if name.lower().endswith(".xlsx"):
             return pd.read_excel(BytesIO(payload), engine="openpyxl")
         raise ValueError("Please upload a CSV or Excel (.xlsx) file.")
@@ -163,8 +162,7 @@ def process_event(event) -> bool:
                     "cleaning_summary", "query_payload", "query_error",
                     "eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                     "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
-                    "eda_charts", "eda_dataset_id", "eda_error",
-                    "eda_selected_cols"):
+                    "eda_charts", "eda_dataset_id", "eda_error", "eda_domain"):
             st.session_state[key] = None if key != "file_size" else 0
         st.session_state.preview_page = 1
         st.session_state.upload_error = None
@@ -193,10 +191,9 @@ def process_event(event) -> bool:
             st.session_state.query_error = None
             st.session_state.upload_error = None
             st.session_state.preview_page = 1
-            # Invalidate EDA cache
             for key in ("eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                         "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
-                        "eda_charts", "eda_dataset_id", "eda_error", "eda_selected_cols"):
+                        "eda_charts", "eda_dataset_id", "eda_error", "eda_domain"):
                 st.session_state[key] = None
         except Exception as exc:
             st.session_state.upload_error = str(exc)
@@ -216,7 +213,8 @@ def process_event(event) -> bool:
                 result_df = result.get("result")
                 if isinstance(result_df, pd.DataFrame):
                     display_df = result_df.head(100)
-                    display_rows = display_df.astype(object).where(pd.notna(display_df), None).to_dict("records")
+                    display_rows = display_df.astype(object).where(
+                        pd.notna(display_df), None).to_dict("records")
                     display_columns = [str(c) for c in display_df.columns]
                     result_count = len(result_df)
                 else:
@@ -237,374 +235,369 @@ def process_event(event) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# EDA computation helpers
+# EDA base stats (computed once per dataset, cached in session state)
 # ---------------------------------------------------------------------------
 
 def _ensure_base_eda(df: pd.DataFrame) -> None:
-    """Compute KPIs, insights, profile, stats — cheap operations done once per dataset."""
     from eda import (classify_columns, compute_kpis, generate_insights,
                      profile_columns, descriptive_stats, outlier_summary)
     current_id = id(df)
     if st.session_state.eda_dataset_id == current_id and st.session_state.eda_kpis is not None:
-        return  # already computed for this exact df object
-    cols = classify_columns(df)
+        return
+    cols    = classify_columns(df)
     profile = profile_columns(df)
     missing_df = (
         profile[profile["missing"] > 0][["column", "missing", "missing_pct"]]
-        .sort_values("missing", ascending=False)
-        .reset_index(drop=True)
+        .sort_values("missing", ascending=False).reset_index(drop=True)
     )
-    stats = descriptive_stats(df, cols["numeric"])
+    stats    = descriptive_stats(df, cols["numeric"])
     outliers = outlier_summary(df, cols["numeric"])
-    corr_df = pd.DataFrame()
+    corr_df  = pd.DataFrame()
     if len(cols["numeric"]) >= 2:
         corr_df = df[cols["numeric"]].corr(numeric_only=True)
-    kpis = compute_kpis(df, cols)
+    kpis     = compute_kpis(df, cols)
     insights = generate_insights(df, cols, corr_df if not corr_df.empty else None)
-    st.session_state.eda_cols = cols
-    st.session_state.eda_kpis = kpis
-    st.session_state.eda_insights = insights
-    st.session_state.eda_profile = profile
-    st.session_state.eda_stats = stats
-    st.session_state.eda_outliers = outliers
-    st.session_state.eda_missing = missing_df
-    st.session_state.eda_corr_df = corr_df
+    st.session_state.eda_cols       = cols
+    st.session_state.eda_kpis       = kpis
+    st.session_state.eda_insights   = insights
+    st.session_state.eda_profile    = profile
+    st.session_state.eda_stats      = stats
+    st.session_state.eda_outliers   = outliers
+    st.session_state.eda_missing    = missing_df
+    st.session_state.eda_corr_df    = corr_df
     st.session_state.eda_dataset_id = current_id
 
 
-def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
-                                 chart_type: str) -> list[dict]:
-    """Chart planner: evaluate all meaningful column combinations and build charts."""
-    from eda import (
-        classify_columns,
-        chart_histogram, chart_boxplot, chart_bar_categorical, chart_donut,
-        chart_timeseries, chart_scatter, chart_grouped_bar, chart_correlation_heatmap,
-    )
+# ---------------------------------------------------------------------------
+# Chart builder — converts a domain plan spec into a renderable dict
+# ---------------------------------------------------------------------------
 
-    # ── inline helpers for combination charts ────────────────────────────────
-    # These are also defined in eda.py; we redefine them here so this function
-    # works even if an older cached eda.pyc is loaded on Streamlit Cloud.
-    import altair as _alt
-    _PALETTE = [
-        "#2864f0","#7c3aed","#10b981","#f59e0b","#ef4444",
-        "#06b6d4","#8b5cf6","#f97316","#14b8a6","#6366f1",
-    ]
-    _MIN_ROWS = 3
+def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
+    """Build one Altair chart from a plan spec returned by domain.plan_hospital_charts."""
+    import altair as alt
 
-    def _ccc(df2, col_a, col_b, max_a=12, max_b=8):
-        """Grouped bar: count of col_b within each col_a."""
-        s = df2[[col_a, col_b]].dropna().copy()
-        if len(s) < _MIN_ROWS:
-            return None
-        top_a = s[col_a].value_counts().head(max_a).index.tolist()
-        top_b = s[col_b].value_counts().head(max_b).index.tolist()
-        s = s[s[col_a].isin(top_a) & s[col_b].isin(top_b)]
-        if len(s) < _MIN_ROWS:
-            return None
-        agg = s.groupby([col_a, col_b]).size().reset_index(name="count")
-        h = min(480, max(220, len(top_a) * max(20, int(200 / max(agg[col_b].nunique(), 1)))))
-        return (
-            _alt.Chart(agg).mark_bar()
-            .encode(
-                _alt.X(f"{col_a}:N", sort="-y", title=col_a,
-                       axis=_alt.Axis(labelAngle=-35, labelLimit=120)),
-                _alt.Y("count:Q", title="Record Count"),
-                _alt.Color(f"{col_b}:N",
-                           scale=_alt.Scale(range=_PALETTE),
-                           legend=_alt.Legend(title=col_b, labelLimit=120)),
-                _alt.Order(f"{col_b}:N"),
-                tooltip=[f"{col_a}:N", f"{col_b}:N",
-                         _alt.Tooltip("count:Q", title="Count")],
-            )
-            .properties(title=f"{col_b} by {col_a}", height=h)
-        )
+    _PALETTE = ["#2864f0","#7c3aed","#10b981","#f59e0b","#ef4444",
+                "#06b6d4","#8b5cf6","#f97316","#14b8a6","#6366f1"]
+    _MIN = 3
 
-    def _cnb(df2, cat_col, num_col, max_cats=15):
-        """Box plot of num_col split by cat_col."""
-        s = df2[[cat_col, num_col]].dropna().copy()
-        if len(s) < _MIN_ROWS:
-            return None
-        top = s[cat_col].value_counts().head(max_cats).index.tolist()
-        s = s[s[cat_col].isin(top)]
-        if len(s) < _MIN_ROWS:
-            return None
-        return (
-            _alt.Chart(s).mark_boxplot(size=14)
-            .encode(
-                _alt.Y(f"{cat_col}:N", sort="-x", title=cat_col),
-                _alt.X(f"{num_col}:Q", title=num_col),
-                _alt.Color(f"{cat_col}:N",
-                           scale=_alt.Scale(range=_PALETTE), legend=None),
-                tooltip=[f"{cat_col}:N", f"{num_col}:Q"],
-            )
-            .properties(title=f"{num_col} Distribution by {cat_col}",
-                        height=max(220, len(top) * 22))
-        )
+    kind  = spec["kind"]
+    cols  = spec["cols"]
+    title = spec["title"]
+    desc  = spec.get("desc", "")
 
-    def _tc(df2, date_col, cat_col, max_cats=6):
-        """Line chart: category record counts over monthly time bins."""
-        s = df2[[date_col, cat_col]].dropna().copy()
-        if len(s) < _MIN_ROWS:
+    for c in cols:
+        if c not in df.columns:
             return None
-        s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
-        s = s.dropna(subset=[date_col])
-        if len(s) < _MIN_ROWS:
-            return None
-        top = s[cat_col].value_counts().head(max_cats).index.tolist()
-        s = s[s[cat_col].isin(top)].copy()
-        s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
-        agg = s.groupby(["_p", cat_col]).size().reset_index(name="count")
-        agg.columns = ["period", cat_col, "count"]
-        return (
-            _alt.Chart(agg).mark_line(point=True)
-            .encode(
-                _alt.X("period:T", title="Date"),
-                _alt.Y("count:Q", title="Record Count"),
-                _alt.Color(f"{cat_col}:N",
-                           scale=_alt.Scale(range=_PALETTE),
-                           legend=_alt.Legend(title=cat_col)),
-                tooltip=["period:T", f"{cat_col}:N",
-                         _alt.Tooltip("count:Q", title="Count")],
-            )
-            .properties(title=f"{cat_col} Counts over Time", height=260)
-        )
 
-    # Try to use the eda.py versions first (preferred); fall back to locals.
     try:
-        from eda import chart_cat_cat_grouped as _ccc_fn
-    except ImportError:
-        _ccc_fn = _ccc
-    try:
-        from eda import chart_cat_num_box as _cnb_fn
-    except ImportError:
-        _cnb_fn = _cnb
-    try:
-        from eda import chart_time_cat as _tc_fn
-    except ImportError:
-        _tc_fn = _tc
+        chart_obj = None
 
-    if not selected_cols:
-        return []
+        if kind == "cat_cat":
+            ca, cb = cols[0], cols[1]
+            s = df[[ca, cb]].dropna().copy()
+            if len(s) < _MIN:
+                return None
+            top_a = s[ca].value_counts().head(12).index.tolist()
+            top_b = s[cb].value_counts().head(8).index.tolist()
+            s = s[s[ca].isin(top_a) & s[cb].isin(top_b)]
+            if len(s) < _MIN:
+                return None
+            agg = s.groupby([ca, cb]).size().reset_index(name="count")
+            h = min(480, max(240, len(top_a) * max(22, int(220 / max(agg[cb].nunique(), 1)))))
+            chart_obj = (
+                alt.Chart(agg).mark_bar()
+                .encode(
+                    alt.X(f"{ca}:N", sort="-y", title=ca,
+                          axis=alt.Axis(labelAngle=-35, labelLimit=130)),
+                    alt.Y("count:Q", title="Record Count"),
+                    alt.Color(f"{cb}:N", scale=alt.Scale(range=_PALETTE),
+                              legend=alt.Legend(title=cb, labelLimit=130)),
+                    alt.Order(f"{cb}:N"),
+                    tooltip=[f"{ca}:N", f"{cb}:N",
+                             alt.Tooltip("count:Q", title="Count")],
+                )
+                .properties(title=title, height=h)
+            )
 
-    sub = df[selected_cols].copy()
-    info = classify_columns(sub)
-    num_cols  = info["numeric"]
-    cat_cols  = info["categorical"]
-    dt_cols   = info["datetime"]
-    bool_cols = info["boolean"]
-    all_cat   = cat_cols + bool_cols
+        elif kind in ("cat_num_box", "catbox"):
+            cat_col, num_col = cols[0], cols[1]
+            s = df[[cat_col, num_col]].dropna().copy()
+            if len(s) < _MIN:
+                return None
+            top = s[cat_col].value_counts().head(15).index.tolist()
+            s = s[s[cat_col].isin(top)]
+            if len(s) < _MIN:
+                return None
+            chart_obj = (
+                alt.Chart(s).mark_boxplot(size=14)
+                .encode(
+                    alt.Y(f"{cat_col}:N", sort="-x", title=cat_col),
+                    alt.X(f"{num_col}:Q", title=num_col),
+                    alt.Color(f"{cat_col}:N",
+                              scale=alt.Scale(range=_PALETTE), legend=None),
+                    tooltip=[f"{cat_col}:N", f"{num_col}:Q"],
+                )
+                .properties(title=title, height=max(240, len(top) * 24))
+            )
+
+        elif kind == "cat_num_bar":
+            cat_col, num_col = cols[0], cols[1]
+            s = df[[cat_col, num_col]].dropna().copy()
+            if len(s) < _MIN:
+                return None
+            agg = (s.groupby(cat_col)[num_col].mean()
+                     .reset_index().rename(columns={num_col: "value"})
+                     .sort_values("value", ascending=False).head(15))
+            if agg.empty:
+                return None
+            chart_obj = (
+                alt.Chart(agg).mark_bar()
+                .encode(
+                    alt.X("value:Q", title=f"Avg {num_col}"),
+                    alt.Y(f"{cat_col}:N", sort="-x", title=cat_col),
+                    alt.Color(f"{cat_col}:N",
+                              scale=alt.Scale(range=_PALETTE), legend=None),
+                    tooltip=[f"{cat_col}:N",
+                             alt.Tooltip("value:Q", title=f"Avg {num_col}",
+                                         format=".1f")],
+                )
+                .properties(title=title, height=max(240, len(agg) * 24))
+            )
+
+        elif kind == "timeseries_count":
+            date_col = cols[0]
+            s = df[[date_col]].dropna().copy()
+            s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+            s = s.dropna()
+            if len(s) < _MIN:
+                return None
+            s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+            agg = s.groupby("_p").size().reset_index(name="count")
+            agg.columns = ["period", "count"]
+            chart_obj = (
+                alt.Chart(agg).mark_line(point=True, color=_PALETTE[0])
+                .encode(
+                    alt.X("period:T", title="Date"),
+                    alt.Y("count:Q", title="Patient Count"),
+                    tooltip=[alt.Tooltip("period:T", title="Month"),
+                             alt.Tooltip("count:Q", title="Admissions")],
+                )
+                .properties(title=title, height=260)
+            )
+
+        elif kind == "timeseries_cat":
+            date_col, cat_col = cols[0], cols[1]
+            s = df[[date_col, cat_col]].dropna().copy()
+            s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+            s = s.dropna(subset=[date_col])
+            if len(s) < _MIN:
+                return None
+            top = s[cat_col].value_counts().head(6).index.tolist()
+            s = s[s[cat_col].isin(top)].copy()
+            s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+            agg = s.groupby(["_p", cat_col]).size().reset_index(name="count")
+            agg.columns = ["period", cat_col, "count"]
+            chart_obj = (
+                alt.Chart(agg).mark_line(point=True)
+                .encode(
+                    alt.X("period:T", title="Date"),
+                    alt.Y("count:Q", title="Record Count"),
+                    alt.Color(f"{cat_col}:N", scale=alt.Scale(range=_PALETTE),
+                              legend=alt.Legend(title=cat_col)),
+                    tooltip=["period:T", f"{cat_col}:N",
+                             alt.Tooltip("count:Q", title="Count")],
+                )
+                .properties(title=title, height=260)
+            )
+
+        elif kind == "scatter":
+            xc, yc = cols[0], cols[1]
+            s = df[[xc, yc]].copy()
+            s[xc] = pd.to_numeric(s[xc], errors="coerce")
+            s[yc] = pd.to_numeric(s[yc], errors="coerce")
+            s = s.dropna()
+            if len(s) < _MIN:
+                return None
+            if len(s) > 2000:
+                s = s.sample(2000, random_state=42)
+            chart_obj = (
+                alt.Chart(s).mark_circle(size=40, opacity=0.55, color=_PALETTE[0])
+                .encode(
+                    alt.X(f"{xc}:Q", title=xc),
+                    alt.Y(f"{yc}:Q", title=yc),
+                    tooltip=[f"{xc}:Q", f"{yc}:Q"],
+                )
+                .properties(title=title, height=260)
+            )
+
+        elif kind == "histogram":
+            nc = cols[0]
+            s = pd.to_numeric(df[nc], errors="coerce").dropna()
+            if len(s) < _MIN:
+                return None
+            chart_obj = (
+                alt.Chart(pd.DataFrame({nc: s}))
+                .mark_bar(color=_PALETTE[0], opacity=0.85)
+                .encode(
+                    alt.X(f"{nc}:Q", bin=alt.Bin(maxbins=30), title=nc),
+                    alt.Y("count()", title="Count"),
+                    tooltip=[alt.Tooltip(f"{nc}:Q", bin=True),
+                             alt.Tooltip("count()", title="Count")],
+                )
+                .properties(title=title, height=240)
+            )
+
+        elif kind == "bar":
+            cat_col = cols[0]
+            vc = (df[cat_col].dropna().astype(str)
+                    .value_counts().head(20)
+                    .rename_axis("category").reset_index(name="count"))
+            if vc.empty:
+                return None
+            chart_obj = (
+                alt.Chart(vc).mark_bar()
+                .encode(
+                    alt.X("count:Q", title="Count"),
+                    alt.Y("category:N", sort="-x", title=cat_col),
+                    alt.Color("category:N",
+                              scale=alt.Scale(range=_PALETTE), legend=None),
+                    tooltip=["category:N", "count:Q"],
+                )
+                .properties(title=title, height=max(200, len(vc) * 24))
+            )
+
+        elif kind == "corr":
+            from eda import chart_correlation_heatmap
+            chart_obj = chart_correlation_heatmap(df, cols)
+
+        if chart_obj is None:
+            return None
+
+        return {
+            "id": str(uuid.uuid4()),
+            "title": title,
+            "desc": desc,
+            "kind": kind,
+            "cols_used": cols,
+            "chart": chart_obj,
+        }
+
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Automatic chart generation — domain-aware
+# ---------------------------------------------------------------------------
+
+def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
+    """Detect domain, run the appropriate chart planner, return chart dicts."""
+    from domain import detect_domain, plan_hospital_charts
+    from eda import classify_columns
+
+    domain = detect_domain(df)
+    st.session_state.eda_domain = domain
+    mappings = domain["mappings"]
 
     charts: list[dict] = []
-    seen_pairs: set[frozenset] = set()
-    MAX_CHARTS = 20
 
-    def add(title, section, desc, cols_used, chart_obj):
-        if chart_obj is not None and len(charts) < MAX_CHARTS:
-            charts.append({
-                "id": str(uuid.uuid4()),
-                "title": title,
-                "section": section,
-                "desc": desc,
-                "cols_used": cols_used,
-                "chart": chart_obj,
-            })
+    if domain["is_healthcare"]:
+        plan = plan_hospital_charts(df, mappings, max_charts=8)
+        for spec in plan:
+            result = _make_chart(df, spec)
+            if result is not None:
+                charts.append(result)
+    else:
+        # Generic auto planner for non-hospital datasets
+        import altair as alt
+        _PALETTE = ["#2864f0","#7c3aed","#10b981","#f59e0b","#ef4444",
+                    "#06b6d4","#8b5cf6","#f97316","#14b8a6","#6366f1"]
+        info = classify_columns(df)
+        num_cols = info["numeric"]
+        cat_cols = info["categorical"]
+        dt_cols  = info["datetime"]
+        MAX = 8
+        seen: set[frozenset] = set()
 
-    auto = (chart_type == "Auto (recommended)")
+        def _add(spec):
+            if len(charts) < MAX:
+                r = _make_chart(df, spec)
+                if r:
+                    charts.append(r)
 
-    # ── Explicit chart-type selection ────────────────────────────────────────
-    if not auto:
-        if chart_type == "Histogram":
-            for col in num_cols[:5]:
-                add(f"Histogram — {col}", "hist", f"Distribution of {col}.", [col],
-                    chart_histogram(sub, col))
-        elif chart_type == "Box Plot":
-            if all_cat and num_cols:
-                cat_col = all_cat[0]
-                for num in num_cols[:3]:
-                    add(f"{num} by {cat_col}", "catbox",
-                        f"Distribution of {num} across {cat_col}.", [cat_col, num],
-                        _cnb_fn(sub, cat_col, num))
-            else:
-                for col in num_cols[:4]:
-                    add(f"Box Plot — {col}", "box", f"Spread of {col}.", [col],
-                        chart_boxplot(sub, col))
-        elif chart_type == "Bar Chart":
-            for col in all_cat[:4]:
-                add(f"Bar Chart — {col}", "catbar",
-                    f"Frequency of each category in {col}.", [col],
-                    chart_bar_categorical(sub, col))
-        elif chart_type == "Donut / Pie Chart":
-            for col in all_cat[:3]:
-                if 2 <= sub[col].nunique(dropna=True) <= 12:
-                    add(f"Donut — {col}", "donut",
-                        f"Proportional breakdown of {col}.", [col],
-                        chart_donut(sub, col))
-        elif chart_type == "Scatter Plot":
-            if len(num_cols) >= 2:
-                c_col = all_cat[0] if all_cat else None
-                add(f"Scatter — {num_cols[0]} vs {num_cols[1]}", "scatter",
-                    f"Relationship between {num_cols[0]} and {num_cols[1]}.",
-                    [num_cols[0], num_cols[1]],
-                    chart_scatter(sub, num_cols[0], num_cols[1], c_col))
-            else:
-                st.warning("Scatter plot needs at least 2 numeric columns.")
-        elif chart_type == "Line / Time Series":
-            if dt_cols and num_cols:
-                add(f"{num_cols[0]} over Time", "time",
-                    f"Trend of {num_cols[0]} over {dt_cols[0]}.",
-                    [dt_cols[0], num_cols[0]],
-                    chart_timeseries(sub, dt_cols[0], num_cols[0]))
-            elif dt_cols and all_cat:
-                add(f"{all_cat[0]} Counts over Time", "time_cat",
-                    f"How {all_cat[0]} changes over {dt_cols[0]}.",
-                    [dt_cols[0], all_cat[0]],
-                    _tc_fn(sub, dt_cols[0], all_cat[0]))
-            else:
-                st.warning("Time series needs a date column in your selection.")
-        elif chart_type == "Correlation Heatmap":
-            if len(num_cols) >= 2:
-                add("Correlation Heatmap", "corr",
-                    "Pairwise correlations between numeric columns.", num_cols,
-                    chart_correlation_heatmap(sub, num_cols))
-            else:
-                st.warning("Correlation heatmap needs at least 2 numeric columns.")
-        elif chart_type == "Grouped Bar":
-            if len(all_cat) >= 2:
-                a, b = all_cat[0], all_cat[1]
-                add(f"{b} by {a}", "cat_cat",
-                    f"Count of {b} within each {a} group.", [a, b],
-                    _ccc_fn(sub, a, b))
-            elif all_cat and num_cols:
-                cat_col, num_col = all_cat[0], num_cols[0]
-                agg = "sum" if any(kw in num_col.lower() for kw in
-                                   ("amount","sales","revenue","total","billing")) else "mean"
-                add(f"{num_col} by {cat_col}", "groupbar",
-                    f"{'Total' if agg=='sum' else 'Average'} {num_col} for each {cat_col}.",
-                    [cat_col, num_col],
-                    chart_grouped_bar(sub, cat_col, num_col, agg))
-            else:
-                st.warning("Grouped bar needs categorical columns in your selection.")
-        return charts
+        # Time series
+        for dt_col in dt_cols[:1]:
+            _add({"kind": "timeseries_count",
+                  "title": "Records over Time",
+                  "desc": f"Monthly record counts from {dt_col}.",
+                  "cols": [dt_col]})
 
-    # ── Auto planner — Phase 1: all pairwise combinations ────────────────────
-    # Cat × Cat
-    cat_pairs_done = 0
-    for i, col_a in enumerate(all_cat):
-        for col_b in all_cat[i + 1:]:
-            if cat_pairs_done >= 6:
+        # Cat × Num grouped bars
+        for cat in cat_cols[:3]:
+            nu = df[cat].nunique(dropna=True)
+            if nu < 2 or nu > 20:
+                continue
+            for num in num_cols[:2]:
+                pk = frozenset([cat, num])
+                if pk in seen:
+                    continue
+                agg = "sum" if any(kw in num.lower() for kw in
+                                   ("amount","sales","revenue","total","billing","price")) else "mean"
+                label = "Total" if agg == "sum" else "Avg"
+                _add({"kind": "cat_num_bar",
+                      "title": f"{label} {num} by {cat}",
+                      "desc": f"{label} {num} per {cat}.",
+                      "cols": [cat, num]})
+                seen.add(pk)
+
+        # Cat × Cat
+        for i, ca in enumerate(cat_cols[:3]):
+            for cb in cat_cols[i + 1:i + 3]:
+                pk = frozenset([ca, cb])
+                if pk in seen:
+                    continue
+                nua = df[ca].nunique(dropna=True)
+                nub = df[cb].nunique(dropna=True)
+                if nua < 2 or nub < 2 or nua > 20 or nub > 20:
+                    continue
+                _add({"kind": "cat_cat",
+                      "title": f"{cb} by {ca}",
+                      "desc": f"Count of {cb} within each {ca}.",
+                      "cols": [ca, cb]})
+                seen.add(pk)
+
+        # Scatter
+        if len(num_cols) >= 2:
+            _add({"kind": "scatter",
+                  "title": f"{num_cols[0]} vs {num_cols[1]}",
+                  "desc": f"Relationship between {num_cols[0]} and {num_cols[1]}.",
+                  "cols": [num_cols[0], num_cols[1]]})
+
+        # Histograms
+        for num in num_cols[:2]:
+            if len(charts) >= MAX:
                 break
-            pair_key = frozenset([col_a, col_b])
-            if pair_key in seen_pairs:
-                continue
-            nu_a = sub[col_a].nunique(dropna=True)
-            nu_b = sub[col_b].nunique(dropna=True)
-            axis_col, color_col = (col_a, col_b) if nu_a >= nu_b else (col_b, col_a)
-            c = _ccc_fn(sub, axis_col, color_col)
-            if c is not None:
-                add(f"{color_col} by {axis_col}", "cat_cat",
-                    f"Count of {color_col} values within each {axis_col} group.",
-                    [axis_col, color_col], c)
-                seen_pairs.add(pair_key)
-                cat_pairs_done += 1
+            _add({"kind": "histogram",
+                  "title": f"Distribution of {num}",
+                  "desc": f"Value distribution of {num}.",
+                  "cols": [num]})
 
-    # Cat × Num
-    cat_num_done = 0
-    for cat_col in all_cat:
-        for num_col in num_cols:
-            if cat_num_done >= 8:
+        # Category bars
+        for cat in cat_cols[:2]:
+            if len(charts) >= MAX:
                 break
-            pair_key = frozenset([cat_col, num_col])
-            if pair_key in seen_pairs:
-                continue
-            if sub[cat_col].nunique(dropna=True) < 2:
-                continue
-            agg = "sum" if any(kw in num_col.lower() for kw in
-                               ("amount","sales","revenue","total","billing","price")) else "mean"
-            label = "Total" if agg == "sum" else "Avg"
-            c = chart_grouped_bar(sub, cat_col, num_col, agg)
-            if c is not None:
-                add(f"{label} {num_col} by {cat_col}", "groupbar",
-                    f"{label} {num_col} for each {cat_col}.",
-                    [cat_col, num_col], c)
-                seen_pairs.add(pair_key)
-                cat_num_done += 1
-            if sub[cat_col].nunique(dropna=True) <= 12:
-                c2 = _cnb_fn(sub, cat_col, num_col)
-                if c2 is not None:
-                    add(f"{num_col} Distribution by {cat_col}", "catbox",
-                        f"Spread of {num_col} across {cat_col}.",
-                        [cat_col, num_col], c2)
+            if 2 <= df[cat].nunique(dropna=True) <= 20:
+                _add({"kind": "bar",
+                      "title": f"Top {cat} Categories",
+                      "desc": f"Frequency of {cat} values.",
+                      "cols": [cat]})
 
-    # Date × Num
-    for dt_col in dt_cols:
-        for num_col in num_cols:
-            pair_key = frozenset([dt_col, num_col])
-            if pair_key in seen_pairs:
-                continue
-            c = chart_timeseries(sub, dt_col, num_col)
-            if c is not None:
-                add(f"{num_col} over Time", "time",
-                    f"Monthly trend of {num_col}.", [dt_col, num_col], c)
-                seen_pairs.add(pair_key)
-
-    # Date × Cat
-    for dt_col in dt_cols:
-        for cat_col in all_cat[:2]:
-            pair_key = frozenset([dt_col, cat_col])
-            if pair_key in seen_pairs:
-                continue
-            if 2 <= sub[cat_col].nunique(dropna=True) <= 12:
-                c = _tc_fn(sub, dt_col, cat_col)
-                if c is not None:
-                    add(f"{cat_col} Counts over Time", "time_cat",
-                        f"How {cat_col} counts change over {dt_col}.",
-                        [dt_col, cat_col], c)
-                    seen_pairs.add(pair_key)
-
-    # Num × Num
-    for i, x_col in enumerate(num_cols):
-        for y_col in num_cols[i + 1:]:
-            pair_key = frozenset([x_col, y_col])
-            if pair_key in seen_pairs:
-                continue
-            c_col = all_cat[0] if all_cat else None
-            c = chart_scatter(sub, x_col, y_col, c_col)
-            if c is not None:
-                add(f"Scatter — {x_col} vs {y_col}", "scatter",
-                    f"Relationship between {x_col} and {y_col}.",
-                    [x_col, y_col], c)
-                seen_pairs.add(pair_key)
-
-    # Phase 2: individual distributions for remaining columns
-    paired = set(col for pair in seen_pairs for col in pair)
-    for cat_col in all_cat:
-        if cat_col in paired:
-            continue
-        nu = sub[cat_col].nunique(dropna=True)
-        if 2 <= nu <= 12:
-            c = chart_donut(sub, cat_col)
-        elif nu > 12:
-            c = chart_bar_categorical(sub, cat_col)
-        else:
-            continue
-        if c is not None:
-            add(f"Distribution — {cat_col}", "donut" if nu <= 12 else "catbar",
-                f"Breakdown of {cat_col}.", [cat_col], c)
-            paired.add(cat_col)
-
-    for num_col in num_cols:
-        if num_col not in paired:
-            c = chart_histogram(sub, num_col)
-            if c is not None:
-                add(f"Histogram — {num_col}", "hist",
-                    f"Distribution of {num_col}.", [num_col], c)
-
-    # Phase 3: correlation heatmap
-    if len(num_cols) >= 2:
-        c = chart_correlation_heatmap(sub, num_cols)
-        if c is not None:
-            add("Correlation Heatmap", "corr",
-                "Pairwise Pearson correlations.", num_cols, c)
+        # Correlation heatmap
+        if len(num_cols) >= 3 and len(charts) < MAX:
+            _add({"kind": "corr",
+                  "title": "Correlation Heatmap",
+                  "desc": "Pairwise correlations between numerical columns.",
+                  "cols": num_cols[:8]})
 
     return charts
 
@@ -669,170 +662,209 @@ def build_component_data() -> dict:
 # EDA page renderer
 # ---------------------------------------------------------------------------
 
+def _render_kpi_cards(kpis: list[dict]) -> None:
+    html = "<div class='kpi-grid'>"
+    for kpi in kpis:
+        html += (
+            f"<div class='kpi-card'>"
+            f"<div class='kpi-icon'>{kpi['icon']}</div>"
+            f"<div class='kpi-label'>{kpi['label']}</div>"
+            f"<div class='kpi-value'>{kpi['value']}</div>"
+            f"<div class='kpi-sub'>{kpi['sub']}</div>"
+            f"</div>"
+        )
+    html += "</div>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_chart_cards(charts: list[dict]) -> None:
+    """Render charts 2-up in a responsive grid; each card has a Remove button."""
+    current  = list(charts)
+    pairs    = [current[i:i + 2] for i in range(0, len(current), 2)]
+    deleted: list[str] = []
+
+    for pair in pairs:
+        col_widgets = st.columns(len(pair), gap="medium")
+        for col_w, item in zip(col_widgets, pair):
+            with col_w:
+                cid       = item["id"]
+                title     = item.get("title", "Chart")
+                desc      = item.get("desc", "")
+                kind      = item.get("kind", "")
+                cols_used = item.get("cols_used", [])
+                cols_lbl  = " · ".join(cols_used) if cols_used else ""
+
+                # Card header HTML
+                st.markdown(
+                    f"<div class='chart-card'>"
+                    f"<div class='chart-title'>{title}</div>"
+                    f"<div class='chart-desc'>{desc}</div>"
+                    + (f"<div class='chart-cols'>Columns: {cols_lbl}</div>"
+                       if cols_lbl else "")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Delete button (right-aligned)
+                _, del_col = st.columns([9, 1])
+                with del_col:
+                    if st.button("✕", key=f"del_{cid}", help="Remove chart"):
+                        deleted.append(cid)
+
+                # Altair chart
+                try:
+                    c = item["chart"]
+                    # configure_* makes it top-level; skip for already-configured kinds
+                    needs_cfg = kind not in ("donut", "corr", "cat_cat")
+                    if needs_cfg:
+                        c = (c
+                             .configure_axis(
+                                 labelFontSize=10, titleFontSize=11,
+                                 labelColor="#52698e", titleColor="#14264a",
+                             )
+                             .configure_title(
+                                 fontSize=13, fontWeight=700,
+                                 color="#14264a", anchor="start",
+                             )
+                             .configure_legend(
+                                 labelFontSize=10, titleFontSize=10,
+                             ))
+                    st.altair_chart(c, use_container_width=True)
+                except Exception as exc:
+                    st.caption(f"Chart unavailable: {exc}")
+
+    if deleted:
+        st.session_state.eda_charts = [
+            ch for ch in (st.session_state.eda_charts or [])
+            if ch["id"] not in deleted
+        ]
+        st.rerun()
+
+
 def _render_eda_page() -> None:
+    """Render the full EDA & Charts page — no manual column selection."""
     df = st.session_state.cleaned_df
 
     # ── No dataset ──────────────────────────────────────────────────────────
     if df is None:
-        st.info("Upload a dataset from the **Upload Dataset** page to get started.", icon="📂")
+        st.markdown(
+            "<div style='text-align:center;padding:60px 20px;color:#7285a7'>"
+            "<div style='font-size:48px;margin-bottom:12px'>📂</div>"
+            "<b>No Dataset Loaded</b><br>"
+            "<span style='font-size:13px'>Upload a dataset from the "
+            "<b>Upload Dataset</b> page first.</span></div>",
+            unsafe_allow_html=True,
+        )
         return
 
-    # Compute cheap base stats once per dataset (KPIs, profile, insights)
+    # Compute cheap base stats once per dataset
     try:
         _ensure_base_eda(df)
     except Exception as exc:
         st.error(f"Could not analyse the dataset: {exc}")
         return
 
-    cols_info      = st.session_state.eda_cols or {}
-    all_cols       = list(df.columns)
-    id_cols        = set(cols_info.get("identifier", []))
-    default_sel    = [c for c in all_cols if c not in id_cols][:12]
+    # ── 1. Header + Generate Charts button ──────────────────────────────────
+    hdr_l, hdr_r = st.columns([3, 1])
+    with hdr_l:
+        st.markdown(
+            "<h2 style='margin:0 0 3px;color:#0b1c3a;font-size:26px;font-weight:850'>"
+            "📊 EDA &amp; Charts</h2>"
+            "<p style='margin:0;color:#52698e;font-size:13px'>"
+            "Explore your data with automatic analysis, visualizations, and insights. "
+            "Discover patterns, trends, and key findings — all in one place.</p>",
+            unsafe_allow_html=True,
+        )
+    with hdr_r:
+        st.write("")
+        gen_clicked = st.button(
+            "✦ Generate Charts",
+            type="primary",
+            use_container_width=True,
+            key="btn_gen_charts",
+        )
 
-    # ── 1. Page header (no empty columns that add height) ───────────────────
+    # ── 2. Dataset info ──────────────────────────────────────────────────────
     st.markdown(
-        "<h2 style='margin:0 0 2px;color:#0b1c3a;font-size:24px;font-weight:850'>"
-        "📊 EDA &amp; Charts</h2>"
-        "<p style='margin:0;color:#52698e;font-size:12px'>"
-        "Select columns, choose a chart type, then click "
-        "<strong>Generate Charts</strong>.</p>",
-        unsafe_allow_html=True,
-    )
-
-    # ── 2. Dataset info banner ───────────────────────────────────────────────
-    st.markdown(
-        f"<div style='background:#f1f6ff;border:1px solid #dde8ff;border-radius:8px;"
-        f"padding:7px 13px;font-size:12px;color:#3558a0;margin:8px 0 12px'>"
+        f"<div style='background:#fff;border:1px solid #e4ebf6;border-radius:9px;"
+        f"padding:8px 14px;font-size:12px;color:#3558a0;margin:10px 0 14px;"
+        f"display:inline-flex;align-items:center;gap:8px'>"
         f"🗂 <b>{st.session_state.filename or 'dataset'}</b> — "
         f"{len(df):,} rows × {len(df.columns)} columns</div>",
         unsafe_allow_html=True,
     )
 
-    # ── 3. Column & chart selection (collapsed after first generation) ───────
-    has_charts = bool(st.session_state.eda_charts)
-    with st.expander("⚙️ Column & Chart Selection", expanded=not has_charts):
-        # Column multiselect
-        if st.session_state.eda_selected_cols is None:
-            st.session_state.eda_selected_cols = default_sel
+    # ── 3. Chart generation ──────────────────────────────────────────────────
+    if gen_clicked:
+        with st.spinner("Detecting domain and building charts…"):
+            try:
+                charts = _generate_auto_charts(df)
+                st.session_state.eda_charts = charts
+                st.session_state.eda_error  = None
+            except Exception as exc:
+                st.session_state.eda_error  = f"Chart generation failed: {exc}"
+                st.session_state.eda_charts = []
+        st.rerun()
 
-        ms_col, btn_col = st.columns([5, 1])
-        with ms_col:
-            selected_cols = st.multiselect(
-                "Columns to visualize",
-                options=all_cols,
-                default=st.session_state.eda_selected_cols,
-                key="ms_eda_cols",
-                help="ID/key columns are excluded by default but may be added manually.",
-            )
-            st.session_state.eda_selected_cols = selected_cols
-        with btn_col:
-            st.write("")          # small spacer so buttons align with the multiselect
-            if st.button("All", key="btn_sel_all", use_container_width=True,
-                         help="Select all columns"):
-                st.session_state.eda_selected_cols = all_cols
-                st.rerun()
-            if st.button("Clear", key="btn_sel_clear", use_container_width=True,
-                         help="Clear selection"):
-                st.session_state.eda_selected_cols = []
-                st.rerun()
-
-        # Identifier warning
-        selected_ids = [c for c in selected_cols if c in id_cols]
-        if selected_ids:
-            st.caption(
-                f"⚠️ ID-like column(s) selected: **{', '.join(selected_ids)}** — "
-                "these rarely produce meaningful charts."
-            )
-
-        # Chart type + Generate button on one row
-        ct_col, gen_col = st.columns([3, 1])
-        with ct_col:
-            chart_type = st.selectbox(
-                "Chart type",
-                options=_CHART_TYPE_OPTIONS,
-                index=_CHART_TYPE_OPTIONS.index(
-                    st.session_state.eda_chart_type
-                    if st.session_state.eda_chart_type in _CHART_TYPE_OPTIONS
-                    else "Auto (recommended)"
-                ),
-                key="sel_chart_type",
-                label_visibility="collapsed",
-            )
-            st.session_state.eda_chart_type = chart_type
-        with gen_col:
-            generate_clicked = st.button(
-                "✦ Generate Charts",
-                type="primary",
-                use_container_width=True,
-                key="btn_generate_eda",
-            )
-
-    # ── 4. Run chart generation (state mutation + rerun, no rendering here) ─
-    if generate_clicked:
-        if not selected_cols:
-            st.warning("Select at least one column before generating charts.", icon="⚠️")
-        else:
-            with st.spinner("Building charts…"):
-                try:
-                    new_charts = _build_charts_for_selection(
-                        df, selected_cols, st.session_state.eda_chart_type
-                    )
-                    if new_charts:
-                        st.session_state.eda_charts = new_charts
-                        st.session_state.eda_error  = None
-                    else:
-                        st.session_state.eda_error  = (
-                            "No suitable charts could be built for those columns and "
-                            "chart type. Try a different selection or choose 'Auto'."
-                        )
-                        st.session_state.eda_charts = []
-                except Exception as exc:
-                    st.session_state.eda_error  = f"Chart generation failed: {exc}"
-                    st.session_state.eda_charts = []
-            st.rerun()   # single controlled rerun — returns here with updated state
-
-    # ── 5. Error banner ─────────────────────────────────────────────────────
+    # ── 4. Error ─────────────────────────────────────────────────────────────
     if st.session_state.eda_error:
         st.error(st.session_state.eda_error)
 
-    # ── 6. KPI cards ────────────────────────────────────────────────────────
+    # ── 5. KPI cards ─────────────────────────────────────────────────────────
     kpis = st.session_state.eda_kpis or []
     if kpis:
-        st.markdown("<div class='sec-title'>📌 Key Metrics</div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div class='sec-head'>📌 Key Insights "
+            "<span style='font-size:11px;font-weight:400;color:#94a3b8'>"
+            "(Auto-generated)</span></div>",
+            unsafe_allow_html=True,
+        )
         _render_kpi_cards(kpis)
 
-    # ── 7. Generated charts (directly below KPIs — no empty placeholder) ────
+    # ── 6. Charts ─────────────────────────────────────────────────────────────
     charts = st.session_state.eda_charts
     if charts:
-        st.markdown("<div class='sec-title'>📉 Generated Charts</div>", unsafe_allow_html=True)
+        domain = st.session_state.eda_domain
+        if domain and domain.get("is_healthcare"):
+            st.markdown(
+                "<div style='background:#ecfdf4;border:1px solid #a3e6c7;"
+                "border-radius:8px;padding:7px 14px;font-size:12px;color:#166442;"
+                "margin-bottom:12px'>🏥 Healthcare dataset detected — "
+                "showing hospital analysis charts.</div>",
+                unsafe_allow_html=True,
+            )
         _render_chart_cards(charts)
     else:
-        # Compact message only — no tall empty container
         st.markdown(
-            "<div style='background:#f7f9fd;border:1px dashed #c8d8f0;border-radius:10px;"
-            "padding:18px 20px;color:#7285a7;font-size:13px;margin:8px 0 16px;text-align:center'>"
-            "📈 Select columns above and click <b>Generate Charts</b> to create visualizations."
+            "<div class='empty-charts'>"
+            "📈 Click <b>Generate Charts</b> above to automatically analyse your dataset."
             "</div>",
             unsafe_allow_html=True,
         )
 
-    # ── 8. Insights ─────────────────────────────────────────────────────────
+    # ── 7. Auto-generated insights ────────────────────────────────────────────
     insights = st.session_state.eda_insights or []
     if insights:
-        st.markdown("<div class='sec-title'>💡 Auto-generated Insights</div>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            "<div class='sec-head' style='margin-top:24px'>💡 Key Insights</div>",
+            unsafe_allow_html=True,
+        )
         for ins in insights:
             st.markdown(f"<div class='insight-bar'>• {ins}</div>",
                         unsafe_allow_html=True)
 
-    # ── 9. Data overview (profile, stats, missing, outliers, correlation) ────
-    st.markdown("<div class='sec-title'>🔍 Data Overview</div>", unsafe_allow_html=True)
+    # ── 8. Data overview tabs ─────────────────────────────────────────────────
+    st.markdown(
+        "<div class='sec-head' style='margin-top:24px'>🔍 Data Overview</div>",
+        unsafe_allow_html=True,
+    )
     tab_profile, tab_stats, tab_missing, tab_outliers, tab_corr = st.tabs([
         "Column Profile", "Descriptive Stats", "Missing Values", "Outliers", "Correlation",
     ])
     with tab_profile:
-        if st.session_state.eda_profile is not None:
-            st.dataframe(st.session_state.eda_profile, use_container_width=True, hide_index=True)
+        p = st.session_state.eda_profile
+        if p is not None:
+            st.dataframe(p, use_container_width=True, hide_index=True)
     with tab_stats:
         s = st.session_state.eda_stats
         if s is None or s.empty:
@@ -850,7 +882,7 @@ def _render_eda_page() -> None:
         if o is None or o.empty:
             st.info("No numeric columns for outlier analysis.")
         else:
-            od = o[o["outliers"] > 0]
+            od = o[o["outliers"] > 0] if "outliers" in o.columns else o
             if od.empty:
                 st.success("No outliers detected (IQR method).", icon="✅")
             else:
@@ -862,114 +894,39 @@ def _render_eda_page() -> None:
         else:
             st.dataframe(c_df.round(3), use_container_width=True)
 
-    # ── 10. Downloads ────────────────────────────────────────────────────────
+    # ── 9. Downloads ─────────────────────────────────────────────────────────
     st.markdown(
-        "<hr style='border:0;border-top:1px solid #e4ebf6;margin:18px 0 10px'>",
+        "<hr style='border:0;border-top:1px solid #e4ebf6;margin:24px 0 14px'>",
         unsafe_allow_html=True,
     )
-    st.markdown("<div class='sec-title'>⬇️ Downloads</div>", unsafe_allow_html=True)
     dl1, dl2, dl3 = st.columns(3)
     with dl1:
-        st.download_button("📄 EDA Summary (CSV)", data=_build_eda_csv(),
-                           file_name="eda_summary.csv", mime="text/csv",
-                           use_container_width=True)
-    with dl2:
-        st.download_button("📋 EDA Report (TXT)",
-                           data=_build_report_text(st.session_state.filename),
-                           file_name="eda_report.txt", mime="text/plain",
-                           use_container_width=True)
-    with dl3:
-        if df is not None:
-            st.download_button(
-                "📊 Export Dataset (CSV)",
-                data=df.to_csv(index=False).encode("utf-8"),
-                file_name=f"cleaned_{st.session_state.filename or 'dataset.csv'}",
-                mime="text/csv", use_container_width=True,
-            )
-
-
-def _render_kpi_cards(kpis: list[dict]) -> None:
-    html = "<div class='kpi-grid'>"
-    for kpi in kpis:
-        html += (
-            f"<div class='kpi-card'>"
-            f"<div class='kpi-icon'>{kpi['icon']}</div>"
-            f"<div class='kpi-label'>{kpi['label']}</div>"
-            f"<div class='kpi-value'>{kpi['value']}</div>"
-            f"<div class='kpi-sub'>{kpi['sub']}</div>"
-            f"</div>"
+        st.download_button(
+            "📄 EDA Summary (CSV)", data=_build_eda_csv(),
+            file_name="eda_summary.csv", mime="text/csv",
+            use_container_width=True,
         )
-    html += "</div>"
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def _render_chart_cards(charts: list[dict]) -> None:
-    """Render charts in 2-column grid; each card has an individual Remove button."""
-    current = list(charts)
-    pairs = [current[i:i + 2] for i in range(0, len(current), 2)]
-    deleted_ids: list[str] = []
-
-    for pair in pairs:
-        cols_layout = st.columns(len(pair))
-        for col_widget, item in zip(cols_layout, pair):
-            with col_widget:
-                cid     = item["id"]
-                title   = item.get("title", "Chart")
-                desc    = item.get("desc", "")
-                section = item.get("section", "")
-                cols_used = item.get("cols_used", [])
-
-                # Card border via container + CSS class
-                with st.container():
-                    # Header row: title + delete button
-                    th, td = st.columns([5, 1])
-                    with th:
-                        cols_label = " · ".join(cols_used) if cols_used else ""
-                        st.markdown(
-                            f"<div class='chart-head'>"
-                            f"<div class='chart-title'>{title}</div>"
-                            f"<div class='chart-desc'>{desc}</div>"
-                            + (f"<div style='font-size:10px;color:#aab8cc;margin-top:3px'>"
-                               f"Columns: {cols_label}</div>" if cols_label else "")
-                            + "</div>",
-                            unsafe_allow_html=True,
-                        )
-                    with td:
-                        if st.button("✕", key=f"del_{cid}", help="Remove this chart",
-                                     use_container_width=True):
-                            deleted_ids.append(cid)
-
-                    # Chart rendering
-                    try:
-                        c = item["chart"]
-                        if section not in ("donut", "corr"):
-                            c = c.configure_axis(
-                                labelFontSize=10, titleFontSize=11,
-                                labelColor="#52698e", titleColor="#14264a",
-                            ).configure_title(
-                                fontSize=13, fontWeight=700,
-                                color="#14264a", anchor="start",
-                            ).configure_legend(
-                                labelFontSize=10, titleFontSize=10,
-                            )
-                        st.altair_chart(c, use_container_width=True)
-                    except Exception as exc:
-                        st.caption(f"Chart unavailable: {exc}")
-
-    # Apply deletions and rerun if any chart was removed
-    if deleted_ids:
-        st.session_state.eda_charts = [
-            ch for ch in (st.session_state.eda_charts or [])
-            if ch["id"] not in deleted_ids
-        ]
-        st.rerun()
+    with dl2:
+        st.download_button(
+            "📋 EDA Report (TXT)",
+            data=_build_report_text(st.session_state.filename),
+            file_name="eda_report.txt", mime="text/plain",
+            use_container_width=True,
+        )
+    with dl3:
+        st.download_button(
+            "📊 Export Dataset (CSV)",
+            data=df.to_csv(index=False).encode("utf-8"),
+            file_name=f"cleaned_{st.session_state.filename or 'dataset.csv'}",
+            mime="text/csv", use_container_width=True,
+        )
 
 
 def _build_eda_csv() -> bytes:
-    buf = StringIO()
-    profile = st.session_state.eda_profile
-    stats = st.session_state.eda_stats
-    missing = st.session_state.eda_missing
+    buf      = StringIO()
+    profile  = st.session_state.eda_profile
+    stats    = st.session_state.eda_stats
+    missing  = st.session_state.eda_missing
     outliers = st.session_state.eda_outliers
     insights = st.session_state.eda_insights or []
     buf.write("=== Column Profile ===\n")
@@ -983,8 +940,8 @@ def _build_eda_csv() -> bytes:
         missing.to_csv(buf, index=False)
     else:
         buf.write("No missing values\n")
-    buf.write("\n=== Outlier Summary ===\n")
     if outliers is not None and not outliers.empty:
+        buf.write("\n=== Outlier Summary ===\n")
         outliers.to_csv(buf, index=False)
     buf.write("\n=== Key Insights ===\n")
     for ins in insights:
@@ -993,25 +950,31 @@ def _build_eda_csv() -> bytes:
 
 
 def _build_report_text(filename: str | None) -> bytes:
-    df = st.session_state.cleaned_df
+    df     = st.session_state.cleaned_df
     n_rows = len(df) if df is not None else 0
     n_cols = len(df.columns) if df is not None else 0
-    profile = st.session_state.eda_profile
-    stats = st.session_state.eda_stats
-    missing = st.session_state.eda_missing
+    profile  = st.session_state.eda_profile
+    stats    = st.session_state.eda_stats
+    missing  = st.session_state.eda_missing
     insights = st.session_state.eda_insights or []
+    domain   = st.session_state.eda_domain
     lines = [
         "AUTOLYTICS — EDA Report", "=" * 50,
         f"Dataset: {filename or 'uploaded dataset'}",
-        f"Rows: {n_rows:,}  |  Columns: {n_cols}", "",
-        "KEY INSIGHTS", "-" * 40,
+        f"Rows: {n_rows:,}  |  Columns: {n_cols}",
     ]
+    if domain:
+        dom_label = "Healthcare" if domain.get("is_healthcare") else "General"
+        lines.append(f"Domain: {dom_label} "
+                     f"(confidence {domain.get('confidence', 0):.0%})")
+    lines += ["", "KEY INSIGHTS", "-" * 40]
     for ins in insights:
         lines.append("• " + ins.replace("**", ""))
     if profile is not None:
         lines += ["", "COLUMN PROFILE", "-" * 40, profile.to_string(index=False)]
     if stats is not None and not stats.empty:
-        lines += ["", "DESCRIPTIVE STATISTICS", "-" * 40, stats.to_string(index=False)]
+        lines += ["", "DESCRIPTIVE STATISTICS", "-" * 40,
+                  stats.to_string(index=False)]
     if missing is not None and not missing.empty:
         lines += ["", "MISSING VALUES", "-" * 40, missing.to_string(index=False)]
     lines += ["", "Generated by AUTOLYTICS"]
@@ -1022,32 +985,25 @@ def _build_report_text(filename: str | None) -> bytes:
 # Main
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     init_state()
     nav = st.session_state.nav
 
-    # ── EDA page ─────────────────────────────────────────────────────────────
+    # ── EDA page ──────────────────────────────────────────────────────────────
     # The EDA page is 100 % Streamlit-native.  We still instantiate the
-    # component so nav events (user clicking another page) are processed,
-    # but we collapse it to zero visible height with CSS and only render
-    # it with height=0 so no blank space is injected above the EDA content.
+    # component so nav-click events (switching to another page) are processed,
+    # but we must prevent it from taking up vertical space.
+    # Two-pronged fix:
+    #   1. CSS: display:none removes the iframe from layout flow entirely.
+    #   2. index.html reports height:1 (not scrollHeight) for the EDA page,
+    #      so Streamlit never allocates space for the component wrapper.
     if nav == "eda":
-        # On the EDA page all content is rendered by Streamlit below this point.
-        # We must still instantiate the component so nav-click events are processed,
-        # but it must occupy ZERO layout space.  display:none removes it from flow;
-        # the companion height:1 message in index.html ensures Streamlit allocates
-        # no vertical space for the component wrapper either.
         st.markdown(
             "<style>"
-            "iframe[title='autolytics_workspace']{"
-            "display:none!important;height:0!important;}"
-            # Also collapse the Streamlit-generated wrapper divs around the component
-            "[data-testid='stCustomComponentV1']{"
-            "height:0!important;min-height:0!important;"
+            "iframe[title='autolytics_workspace']"
+            "{display:none!important;height:0!important;}"
+            "[data-testid='stCustomComponentV1']"
+            "{height:0!important;min-height:0!important;"
             "padding:0!important;margin:0!important;overflow:hidden!important;}"
             "</style>",
             unsafe_allow_html=True,
@@ -1062,7 +1018,7 @@ def main():
         _render_eda_page()
         return
 
-    # All other pages
+    # ── All other pages ────────────────────────────────────────────────────────
     event = _workspace(
         **build_component_data(),
         key="autolytics_custom_workspace",
@@ -1078,7 +1034,8 @@ def main():
         if details:
             with st.expander("View detailed imputation report"):
                 st.dataframe(
-                    pd.DataFrame([{"Column": col, **info} for col, info in details.items()]),
+                    pd.DataFrame([{"Column": col, **info}
+                                  for col, info in details.items()]),
                     use_container_width=True, hide_index=True,
                 )
 
