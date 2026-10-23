@@ -32,7 +32,6 @@ st.markdown("""
 iframe[title="autolytics_workspace"]{ width:100%!important;border:0!important; }
 
 /* ── EDA page chrome ─────────────────────────────────────────────────── */
-.eda-wrap  { padding:20px 28px 36px;background:#f7f9fd;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif; }
 .kpi-grid  { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin:4px 0 16px; }
 .kpi-card  { background:#fff;border:1px solid #e4ebf6;border-radius:12px;padding:14px 16px;box-shadow:0 3px 12px rgba(25,51,95,.04); }
 .kpi-icon  { font-size:22px;margin-bottom:4px; }
@@ -275,40 +274,131 @@ def _ensure_base_eda(df: pd.DataFrame) -> None:
 
 def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                                  chart_type: str) -> list[dict]:
-    """Chart planner: evaluate all meaningful column combinations and build charts.
-
-    Priority order:
-      1. Pairwise combination charts (Cat×Cat, Cat×Num, Date×Num, Date×Cat, Num×Num)
-      2. Individual distributions (histograms, bar charts, donuts)
-      3. Correlation heatmap when multiple numerics are present
-    """
+    """Chart planner: evaluate all meaningful column combinations and build charts."""
     from eda import (
-        classify_columns, _pick_col,
+        classify_columns,
         chart_histogram, chart_boxplot, chart_bar_categorical, chart_donut,
         chart_timeseries, chart_scatter, chart_grouped_bar, chart_correlation_heatmap,
-        chart_cat_cat_grouped, chart_cat_num_box, chart_time_cat,
-        _MAX_CAT,
     )
+
+    # ── inline helpers for combination charts ────────────────────────────────
+    # These are also defined in eda.py; we redefine them here so this function
+    # works even if an older cached eda.pyc is loaded on Streamlit Cloud.
+    import altair as _alt
+    _PALETTE = [
+        "#2864f0","#7c3aed","#10b981","#f59e0b","#ef4444",
+        "#06b6d4","#8b5cf6","#f97316","#14b8a6","#6366f1",
+    ]
+    _MIN_ROWS = 3
+
+    def _ccc(df2, col_a, col_b, max_a=12, max_b=8):
+        """Grouped bar: count of col_b within each col_a."""
+        s = df2[[col_a, col_b]].dropna().copy()
+        if len(s) < _MIN_ROWS:
+            return None
+        top_a = s[col_a].value_counts().head(max_a).index.tolist()
+        top_b = s[col_b].value_counts().head(max_b).index.tolist()
+        s = s[s[col_a].isin(top_a) & s[col_b].isin(top_b)]
+        if len(s) < _MIN_ROWS:
+            return None
+        agg = s.groupby([col_a, col_b]).size().reset_index(name="count")
+        h = min(480, max(220, len(top_a) * max(20, int(200 / max(agg[col_b].nunique(), 1)))))
+        return (
+            _alt.Chart(agg).mark_bar()
+            .encode(
+                _alt.X(f"{col_a}:N", sort="-y", title=col_a,
+                       axis=_alt.Axis(labelAngle=-35, labelLimit=120)),
+                _alt.Y("count:Q", title="Record Count"),
+                _alt.Color(f"{col_b}:N",
+                           scale=_alt.Scale(range=_PALETTE),
+                           legend=_alt.Legend(title=col_b, labelLimit=120)),
+                _alt.Order(f"{col_b}:N"),
+                tooltip=[f"{col_a}:N", f"{col_b}:N",
+                         _alt.Tooltip("count:Q", title="Count")],
+            )
+            .properties(title=f"{col_b} by {col_a}", height=h)
+        )
+
+    def _cnb(df2, cat_col, num_col, max_cats=15):
+        """Box plot of num_col split by cat_col."""
+        s = df2[[cat_col, num_col]].dropna().copy()
+        if len(s) < _MIN_ROWS:
+            return None
+        top = s[cat_col].value_counts().head(max_cats).index.tolist()
+        s = s[s[cat_col].isin(top)]
+        if len(s) < _MIN_ROWS:
+            return None
+        return (
+            _alt.Chart(s).mark_boxplot(size=14)
+            .encode(
+                _alt.Y(f"{cat_col}:N", sort="-x", title=cat_col),
+                _alt.X(f"{num_col}:Q", title=num_col),
+                _alt.Color(f"{cat_col}:N",
+                           scale=_alt.Scale(range=_PALETTE), legend=None),
+                tooltip=[f"{cat_col}:N", f"{num_col}:Q"],
+            )
+            .properties(title=f"{num_col} Distribution by {cat_col}",
+                        height=max(220, len(top) * 22))
+        )
+
+    def _tc(df2, date_col, cat_col, max_cats=6):
+        """Line chart: category record counts over monthly time bins."""
+        s = df2[[date_col, cat_col]].dropna().copy()
+        if len(s) < _MIN_ROWS:
+            return None
+        s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+        s = s.dropna(subset=[date_col])
+        if len(s) < _MIN_ROWS:
+            return None
+        top = s[cat_col].value_counts().head(max_cats).index.tolist()
+        s = s[s[cat_col].isin(top)].copy()
+        s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+        agg = s.groupby(["_p", cat_col]).size().reset_index(name="count")
+        agg.columns = ["period", cat_col, "count"]
+        return (
+            _alt.Chart(agg).mark_line(point=True)
+            .encode(
+                _alt.X("period:T", title="Date"),
+                _alt.Y("count:Q", title="Record Count"),
+                _alt.Color(f"{cat_col}:N",
+                           scale=_alt.Scale(range=_PALETTE),
+                           legend=_alt.Legend(title=cat_col)),
+                tooltip=["period:T", f"{cat_col}:N",
+                         _alt.Tooltip("count:Q", title="Count")],
+            )
+            .properties(title=f"{cat_col} Counts over Time", height=260)
+        )
+
+    # Try to use the eda.py versions first (preferred); fall back to locals.
+    try:
+        from eda import chart_cat_cat_grouped as _ccc_fn
+    except ImportError:
+        _ccc_fn = _ccc
+    try:
+        from eda import chart_cat_num_box as _cnb_fn
+    except ImportError:
+        _cnb_fn = _cnb
+    try:
+        from eda import chart_time_cat as _tc_fn
+    except ImportError:
+        _tc_fn = _tc
 
     if not selected_cols:
         return []
 
-    # Work only with the selected subset
     sub = df[selected_cols].copy()
     info = classify_columns(sub)
     num_cols  = info["numeric"]
     cat_cols  = info["categorical"]
     dt_cols   = info["datetime"]
     bool_cols = info["boolean"]
-
-    # Treat boolean columns as categorical for combination analysis
-    all_cat = cat_cols + bool_cols
+    all_cat   = cat_cols + bool_cols
 
     charts: list[dict] = []
-    seen_pairs: set[frozenset] = set()   # prevent duplicate pair charts
+    seen_pairs: set[frozenset] = set()
     MAX_CHARTS = 20
 
-    def add(title: str, section: str, desc: str, cols_used: list[str], chart_obj) -> None:
+    def add(title, section, desc, cols_used, chart_obj):
         if chart_obj is not None and len(charts) < MAX_CHARTS:
             charts.append({
                 "id": str(uuid.uuid4()),
@@ -321,42 +411,34 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
 
     auto = (chart_type == "Auto (recommended)")
 
-    # ── Explicit single chart-type selection ────────────────────────────────
+    # ── Explicit chart-type selection ────────────────────────────────────────
     if not auto:
         if chart_type == "Histogram":
             for col in num_cols[:5]:
-                add(f"Histogram — {col}", "hist",
-                    f"Distribution of {col}.", [col],
+                add(f"Histogram — {col}", "hist", f"Distribution of {col}.", [col],
                     chart_histogram(sub, col))
-
         elif chart_type == "Box Plot":
-            # If there's a Cat col, prefer Cat×Num box; else plain box per num col
             if all_cat and num_cols:
                 cat_col = all_cat[0]
                 for num in num_cols[:3]:
                     add(f"{num} by {cat_col}", "catbox",
-                        f"Distribution of {num} across {cat_col} categories.",
-                        [cat_col, num],
-                        chart_cat_num_box(sub, cat_col, num))
+                        f"Distribution of {num} across {cat_col}.", [cat_col, num],
+                        _cnb_fn(sub, cat_col, num))
             else:
                 for col in num_cols[:4]:
-                    add(f"Box Plot — {col}", "box",
-                        f"Spread and outliers for {col}.", [col],
+                    add(f"Box Plot — {col}", "box", f"Spread of {col}.", [col],
                         chart_boxplot(sub, col))
-
         elif chart_type == "Bar Chart":
             for col in all_cat[:4]:
                 add(f"Bar Chart — {col}", "catbar",
                     f"Frequency of each category in {col}.", [col],
                     chart_bar_categorical(sub, col))
-
         elif chart_type == "Donut / Pie Chart":
             for col in all_cat[:3]:
                 if 2 <= sub[col].nunique(dropna=True) <= 12:
                     add(f"Donut — {col}", "donut",
                         f"Proportional breakdown of {col}.", [col],
                         chart_donut(sub, col))
-
         elif chart_type == "Scatter Plot":
             if len(num_cols) >= 2:
                 c_col = all_cat[0] if all_cat else None
@@ -365,8 +447,7 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                     [num_cols[0], num_cols[1]],
                     chart_scatter(sub, num_cols[0], num_cols[1], c_col))
             else:
-                st.warning("Scatter plot needs at least 2 numeric columns in your selection.")
-
+                st.warning("Scatter plot needs at least 2 numeric columns.")
         elif chart_type == "Line / Time Series":
             if dt_cols and num_cols:
                 add(f"{num_cols[0]} over Time", "time",
@@ -375,29 +456,24 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                     chart_timeseries(sub, dt_cols[0], num_cols[0]))
             elif dt_cols and all_cat:
                 add(f"{all_cat[0]} Counts over Time", "time_cat",
-                    f"How {all_cat[0]} counts change over {dt_cols[0]}.",
+                    f"How {all_cat[0]} changes over {dt_cols[0]}.",
                     [dt_cols[0], all_cat[0]],
-                    chart_time_cat(sub, dt_cols[0], all_cat[0]))
+                    _tc_fn(sub, dt_cols[0], all_cat[0]))
             else:
                 st.warning("Time series needs a date column in your selection.")
-
         elif chart_type == "Correlation Heatmap":
             if len(num_cols) >= 2:
                 add("Correlation Heatmap", "corr",
-                    "Pairwise correlations between selected numeric columns.",
-                    num_cols,
+                    "Pairwise correlations between numeric columns.", num_cols,
                     chart_correlation_heatmap(sub, num_cols))
             else:
                 st.warning("Correlation heatmap needs at least 2 numeric columns.")
-
         elif chart_type == "Grouped Bar":
-            # Prefer Cat×Cat if two categoricals selected, else Cat×Num
             if len(all_cat) >= 2:
                 a, b = all_cat[0], all_cat[1]
                 add(f"{b} by {a}", "cat_cat",
-                    f"Count of {b} categories within each {a} group.",
-                    [a, b],
-                    chart_cat_cat_grouped(sub, a, b))
+                    f"Count of {b} within each {a} group.", [a, b],
+                    _ccc_fn(sub, a, b))
             elif all_cat and num_cols:
                 cat_col, num_col = all_cat[0], num_cols[0]
                 agg = "sum" if any(kw in num_col.lower() for kw in
@@ -410,9 +486,8 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                 st.warning("Grouped bar needs categorical columns in your selection.")
         return charts
 
-    # ── Auto planner ────────────────────────────────────────────────────────
-    # PHASE 1: All meaningful pairwise combination charts
-    # Cat × Cat — generates grouped bar for every pair (up to a sensible limit)
+    # ── Auto planner — Phase 1: all pairwise combinations ────────────────────
+    # Cat × Cat
     cat_pairs_done = 0
     for i, col_a in enumerate(all_cat):
         for col_b in all_cat[i + 1:]:
@@ -421,11 +496,10 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
             pair_key = frozenset([col_a, col_b])
             if pair_key in seen_pairs:
                 continue
-            # Prefer the higher-cardinality column as the X-axis (grouping dimension)
             nu_a = sub[col_a].nunique(dropna=True)
             nu_b = sub[col_b].nunique(dropna=True)
             axis_col, color_col = (col_a, col_b) if nu_a >= nu_b else (col_b, col_a)
-            c = chart_cat_cat_grouped(sub, axis_col, color_col)
+            c = _ccc_fn(sub, axis_col, color_col)
             if c is not None:
                 add(f"{color_col} by {axis_col}", "cat_cat",
                     f"Count of {color_col} values within each {axis_col} group.",
@@ -433,38 +507,35 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                 seen_pairs.add(pair_key)
                 cat_pairs_done += 1
 
-    # Cat × Num — for each (cat, num) pair: grouped bar + box plot
-    cat_num_pairs_done = 0
+    # Cat × Num
+    cat_num_done = 0
     for cat_col in all_cat:
         for num_col in num_cols:
-            if cat_num_pairs_done >= 8:
+            if cat_num_done >= 8:
                 break
             pair_key = frozenset([cat_col, num_col])
             if pair_key in seen_pairs:
                 continue
-            nu = sub[cat_col].nunique(dropna=True)
-            if nu < 2:
+            if sub[cat_col].nunique(dropna=True) < 2:
                 continue
             agg = "sum" if any(kw in num_col.lower() for kw in
                                ("amount","sales","revenue","total","billing","price")) else "mean"
             label = "Total" if agg == "sum" else "Avg"
-            # Grouped bar
             c = chart_grouped_bar(sub, cat_col, num_col, agg)
             if c is not None:
                 add(f"{label} {num_col} by {cat_col}", "groupbar",
-                    f"{label} {num_col} for each {cat_col} category.",
+                    f"{label} {num_col} for each {cat_col}.",
                     [cat_col, num_col], c)
                 seen_pairs.add(pair_key)
-                cat_num_pairs_done += 1
-            # Box plot for distribution (only when few categories)
-            if nu <= 12:
-                c2 = chart_cat_num_box(sub, cat_col, num_col)
+                cat_num_done += 1
+            if sub[cat_col].nunique(dropna=True) <= 12:
+                c2 = _cnb_fn(sub, cat_col, num_col)
                 if c2 is not None:
                     add(f"{num_col} Distribution by {cat_col}", "catbox",
-                        f"Spread of {num_col} values across {cat_col} categories.",
+                        f"Spread of {num_col} across {cat_col}.",
                         [cat_col, num_col], c2)
 
-    # Date × Num — time-series
+    # Date × Num
     for dt_col in dt_cols:
         for num_col in num_cols:
             pair_key = frozenset([dt_col, num_col])
@@ -473,26 +544,24 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
             c = chart_timeseries(sub, dt_col, num_col)
             if c is not None:
                 add(f"{num_col} over Time", "time",
-                    f"Monthly trend of {num_col} over {dt_col}.",
-                    [dt_col, num_col], c)
+                    f"Monthly trend of {num_col}.", [dt_col, num_col], c)
                 seen_pairs.add(pair_key)
 
-    # Date × Cat — category counts over time
+    # Date × Cat
     for dt_col in dt_cols:
         for cat_col in all_cat[:2]:
             pair_key = frozenset([dt_col, cat_col])
             if pair_key in seen_pairs:
                 continue
-            nu = sub[cat_col].nunique(dropna=True)
-            if 2 <= nu <= 12:
-                c = chart_time_cat(sub, dt_col, cat_col)
+            if 2 <= sub[cat_col].nunique(dropna=True) <= 12:
+                c = _tc_fn(sub, dt_col, cat_col)
                 if c is not None:
                     add(f"{cat_col} Counts over Time", "time_cat",
-                        f"How {cat_col} record counts change over {dt_col}.",
+                        f"How {cat_col} counts change over {dt_col}.",
                         [dt_col, cat_col], c)
                     seen_pairs.add(pair_key)
 
-    # Num × Num — scatter plots
+    # Num × Num
     for i, x_col in enumerate(num_cols):
         for y_col in num_cols[i + 1:]:
             pair_key = frozenset([x_col, y_col])
@@ -506,42 +575,36 @@ def _build_charts_for_selection(df: pd.DataFrame, selected_cols: list[str],
                     [x_col, y_col], c)
                 seen_pairs.add(pair_key)
 
-    # PHASE 2: Individual distributions for remaining columns
-    individual_done = set(col for pair in seen_pairs for col in pair)
-
+    # Phase 2: individual distributions for remaining columns
+    paired = set(col for pair in seen_pairs for col in pair)
     for cat_col in all_cat:
+        if cat_col in paired:
+            continue
         nu = sub[cat_col].nunique(dropna=True)
-        if 2 <= nu <= 12 and cat_col not in individual_done:
+        if 2 <= nu <= 12:
             c = chart_donut(sub, cat_col)
-            if c is not None:
-                add(f"Distribution — {cat_col}", "donut",
-                    f"Proportional breakdown of {cat_col}.",
-                    [cat_col], c)
-                individual_done.add(cat_col)
-        elif nu > 12 and cat_col not in individual_done:
+        elif nu > 12:
             c = chart_bar_categorical(sub, cat_col)
-            if c is not None:
-                add(f"Top Categories — {cat_col}", "catbar",
-                    f"Most frequent values in {cat_col}.",
-                    [cat_col], c)
-                individual_done.add(cat_col)
+        else:
+            continue
+        if c is not None:
+            add(f"Distribution — {cat_col}", "donut" if nu <= 12 else "catbar",
+                f"Breakdown of {cat_col}.", [cat_col], c)
+            paired.add(cat_col)
 
     for num_col in num_cols:
-        if num_col not in individual_done:
+        if num_col not in paired:
             c = chart_histogram(sub, num_col)
             if c is not None:
                 add(f"Histogram — {num_col}", "hist",
-                    f"Distribution of {num_col} values.",
-                    [num_col], c)
-                individual_done.add(num_col)
+                    f"Distribution of {num_col}.", [num_col], c)
 
-    # PHASE 3: Correlation heatmap when multiple numerics are present
+    # Phase 3: correlation heatmap
     if len(num_cols) >= 2:
         c = chart_correlation_heatmap(sub, num_cols)
         if c is not None:
             add("Correlation Heatmap", "corr",
-                "Pairwise Pearson correlations between numeric columns.",
-                num_cols, c)
+                "Pairwise Pearson correlations.", num_cols, c)
 
     return charts
 
@@ -959,12 +1022,27 @@ def _build_report_text(filename: str | None) -> bytes:
 # Main
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     init_state()
     nav = st.session_state.nav
 
-    # EDA page: render sidebar component (compact) + Streamlit content below
+    # ── EDA page ─────────────────────────────────────────────────────────────
+    # The EDA page is 100 % Streamlit-native.  We still instantiate the
+    # component so nav events (user clicking another page) are processed,
+    # but we collapse it to zero visible height with CSS and only render
+    # it with height=0 so no blank space is injected above the EDA content.
     if nav == "eda":
+        # Hide the iframe completely on the EDA page so it contributes 0 height.
+        st.markdown(
+            "<style>iframe[title='autolytics_workspace']"
+            "{height:0!important;min-height:0!important;max-height:0!important;"
+            "overflow:hidden!important;display:block!important;}</style>",
+            unsafe_allow_html=True,
+        )
         event = _workspace(
             **build_component_data(),
             key="autolytics_custom_workspace",
@@ -972,10 +1050,8 @@ def main():
         )
         if event and process_event(event):
             st.rerun()
-        # Render the full EDA content directly — no wrapper div that adds height
-        st.markdown("<div class='eda-wrap'>", unsafe_allow_html=True)
+        # Render EDA content directly — no container that adds padding/height
         _render_eda_page()
-        st.markdown("</div>", unsafe_allow_html=True)
         return
 
     # All other pages
