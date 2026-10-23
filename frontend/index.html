@@ -5,7 +5,15 @@
 .layout{width:100%;max-width:100%;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:calc(100vh - 2px);background:var(--bg);border-radius:12px;overflow:hidden}
 .layout.eda-mode{grid-template-columns:188px minmax(0,1fr);min-height:100vh;height:100vh;overflow:hidden;border-radius:0;background:var(--bg)}
 .sidebar{background:linear-gradient(180deg,#0b1b38,#0c2147);color:white;display:flex;flex-direction:column;padding:18px 8px;min-height:calc(100vh - 2px)}
-.layout.eda-mode .sidebar{min-height:100vh;height:100vh;padding:18px 8px;}
+.layout.eda-mode .sidebar{min-height:100vh;height:100vh;padding:14px 8px;position:relative}
+.eda-nav-toggle{width:100%;height:34px;border:1px solid #2d4772;background:#10294f;color:#dce8ff;border-radius:7px;cursor:pointer;margin-bottom:14px;font-size:16px}
+.eda-nav-toggle:hover{background:#1b3a6b}
+.layout.eda-mode .sidebar-collapsed{padding:14px 6px}
+.layout.eda-mode .sidebar-collapsed .brand{justify-content:center;padding:0 0 24px}
+.layout.eda-mode .sidebar-collapsed .brand>div:last-child{display:none}
+.layout.eda-mode .sidebar-collapsed .nav{justify-content:center;padding:12px 3px;gap:0;font-size:0}
+.layout.eda-mode .sidebar-collapsed .navicon{font-size:19px;width:auto}
+.layout.eda-mode .sidebar-collapsed .quote{display:none}
 .layout.eda-mode .brand{gap:8px;padding:0 5px 27px}.layout.eda-mode .mark{width:34px;height:34px;border-radius:8px;font-size:19px}.layout.eda-mode .brandname{font-size:14px}.layout.eda-mode .tagline{font-size:9px}.layout.eda-mode .nav{font-size:12px;padding:11px 8px;gap:9px}.layout.eda-mode .quote{font-size:11px;padding:20px 6px 8px}
 .brand{display:flex;gap:12px;align-items:center;padding:0 8px 32px}.mark{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#4788ff,#204bd7);display:grid;place-items:center;font-size:24px;font-weight:850}.brandname{font-weight:850;font-size:17px;letter-spacing:.04em}.tagline{color:#a8bbdf;font-size:11px;margin-top:3px}
 .nav{display:flex;align-items:center;gap:13px;padding:13px 14px;border-radius:9px;color:#d5e0f5;font-size:14px;margin:3px 0;cursor:pointer;border:1px solid transparent}.nav:hover{background:#172e54}
@@ -163,7 +171,9 @@ function scrollToSection(sectionId){
 /* ── Sidebar HTML ────────────────────────────────────────────────────── */
 function sidebar(){
   const nav=args.nav||'home';
-  return `<aside class="sidebar">
+  const collapsed = !!args.sidebar_collapsed && nav === 'eda';
+  return `<aside class="sidebar ${collapsed ? 'sidebar-collapsed' : ''}">
+    ${nav === 'eda' ? `<button class="eda-nav-toggle" data-sidebar-toggle title="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}">${collapsed ? '»' : '«'}</button>` : ''}
     <div class="brand"><div class="mark">A</div><div><div class="brandname">AUTOLYTICS</div><div class="tagline">From Data to Decisions</div></div></div>
     ${navItem('Home','home','⌂')}
     ${navItem('Upload Dataset','upload','⇧')}
@@ -321,6 +331,14 @@ function render(){
 
 /* ── Event binding ───────────────────────────────────────────────────── */
 function bindCommon(){
+  document.querySelectorAll('[data-sidebar-toggle]').forEach(el=>{
+    el.onclick=e=>{
+      e.preventDefault();e.stopPropagation();
+      args.sidebar_collapsed=!args.sidebar_collapsed;
+      render();
+      send({action:'sidebar_toggle'});
+    };
+  });
   // Nav clicks — one listener per element, no duplicates (innerHTML replaced each render)
   document.querySelectorAll('[data-nav]').forEach(el=>{
     el.onclick=e=>{

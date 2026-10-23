@@ -80,6 +80,7 @@ NAV_PAGES = {"home", "upload", "query", "eda", "modeling", "reports"}
 def init_state():
     defaults: dict = {
         "nav": "home",
+        "sidebar_collapsed": False,
         "original_df": None,
         "cleaned_df": None,
         "filename": None,
@@ -158,7 +159,10 @@ def process_event(event) -> bool:
 
     action = event.get("action")
 
-    if action == "nav":
+    if action == "sidebar_toggle":
+        st.session_state.sidebar_collapsed = not bool(st.session_state.get("sidebar_collapsed", False))
+
+    elif action == "nav":
         nav = event.get("nav")
         if nav in NAV_PAGES:
             st.session_state.nav = nav
@@ -312,15 +316,18 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
             if len(s) < _MIN:
                 return None
             agg = s.groupby([ca, cb]).size().reset_index(name="count")
-            h = min(480, max(240, len(top_a) * max(22, int(220 / max(agg[cb].nunique(), 1)))))
+            # Horizontal stacked bars preserve every category label in narrow
+            # cards and make the full category list readable without clipping.
+            h = min(520, max(260, len(top_a) * 34))
             chart_obj = (
                 alt.Chart(agg).mark_bar()
                 .encode(
-                    alt.X(f"{ca}:N", sort="-y", title=ca,
-                          axis=alt.Axis(labelAngle=-35, labelLimit=130)),
-                    alt.Y("count:Q", title="Record Count"),
+                    alt.Y(f"{ca}:N", sort="-x", title=ca,
+                          axis=alt.Axis(labelLimit=220, labelOverlap=False)),
+                    alt.X("count:Q", title="Record Count"),
                     alt.Color(f"{cb}:N", scale=alt.Scale(range=_PALETTE),
-                              legend=alt.Legend(title=cb, labelLimit=130)),
+                              legend=alt.Legend(title=cb, labelLimit=180,
+                                                orient="bottom", columns=3)),
                     alt.Order(f"{cb}:N"),
                     tooltip=[f"{ca}:N", f"{cb}:N",
                              alt.Tooltip("count:Q", title="Count")],
@@ -380,18 +387,31 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
             s = s.dropna()
             if len(s) < _MIN:
                 return None
-            s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+            span_days = int((s[date_col].max() - s[date_col].min()).days)
+            if span_days >= 730:
+                s["_p"] = s[date_col].dt.to_period("Y").dt.to_timestamp()
+                axis_title, axis_format, axis_angle, tooltip_title = "Year", "%Y", 0, "Year"
+            else:
+                s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+                multi_year = s[date_col].dt.year.nunique() > 1
+                axis_title = "Month / Year" if multi_year else "Month"
+                axis_format = "%b %Y" if multi_year else "%b"
+                axis_angle = -40 if multi_year else 0
+                tooltip_title = axis_title
             agg = s.groupby("_p").size().reset_index(name="count")
             agg.columns = ["period", "count"]
             chart_obj = (
                 alt.Chart(agg).mark_line(point=True, color=_PALETTE[0])
                 .encode(
-                    alt.X("period:T", title="Date"),
+                    alt.X("period:T", title=axis_title,
+                          axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                        labelOverlap=False, labelLimit=100)),
                     alt.Y("count:Q", title="Patient Count"),
-                    tooltip=[alt.Tooltip("period:T", title="Month"),
+                    tooltip=[alt.Tooltip("period:T", title=tooltip_title,
+                                         format=axis_format),
                              alt.Tooltip("count:Q", title="Admissions")],
                 )
-                .properties(title=title, height=260)
+                .properties(title=title, height=280)
             )
 
         elif kind == "timeseries_cat":
@@ -403,20 +423,33 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
                 return None
             top = s[cat_col].value_counts().head(6).index.tolist()
             s = s[s[cat_col].isin(top)].copy()
-            s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+            span_days = int((s[date_col].max() - s[date_col].min()).days)
+            if span_days >= 730:
+                s["_p"] = s[date_col].dt.to_period("Y").dt.to_timestamp()
+                axis_title, axis_format, axis_angle = "Year", "%Y", 0
+            else:
+                s["_p"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+                multi_year = s[date_col].dt.year.nunique() > 1
+                axis_title = "Month / Year" if multi_year else "Month"
+                axis_format = "%b %Y" if multi_year else "%b"
+                axis_angle = -40 if multi_year else 0
             agg = s.groupby(["_p", cat_col]).size().reset_index(name="count")
             agg.columns = ["period", cat_col, "count"]
             chart_obj = (
                 alt.Chart(agg).mark_line(point=True)
                 .encode(
-                    alt.X("period:T", title="Date"),
+                    alt.X("period:T", title=axis_title,
+                          axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                        labelOverlap=False, labelLimit=100)),
                     alt.Y("count:Q", title="Record Count"),
                     alt.Color(f"{cat_col}:N", scale=alt.Scale(range=_PALETTE),
-                              legend=alt.Legend(title=cat_col)),
-                    tooltip=["period:T", f"{cat_col}:N",
+                              legend=alt.Legend(title=cat_col, labelLimit=160,
+                                                orient="bottom", columns=3)),
+                    tooltip=[alt.Tooltip("period:T", title=axis_title,
+                                         format=axis_format), f"{cat_col}:N",
                              alt.Tooltip("count:Q", title="Count")],
                 )
-                .properties(title=title, height=260)
+                .properties(title=title, height=280)
             )
 
         elif kind == "scatter":
@@ -652,6 +685,7 @@ def build_component_data() -> dict:
     charts = st.session_state.eda_charts
     return {
         "nav": st.session_state.nav,
+        "sidebar_collapsed": bool(st.session_state.get("sidebar_collapsed", False)),
         "data": {"columns": columns, "rows": rows, "total_rows": total_rows},
         "file": {"name": st.session_state.filename,
                  "size_label": human_size(st.session_state.file_size)}
@@ -687,20 +721,11 @@ def _render_kpi_cards(kpis: list[dict]) -> None:
 
 
 def _render_chart_cards(charts: list[dict]) -> None:
-    """Render charts in stable, design-matched cards without invalid Vega titles."""
+    """Render stable responsive chart cards; charts remain inside their own card."""
     deleted: list[str] = []
-
-    # The reference design uses a wide + narrow pair first, then compact
-    # three-column rows. This keeps chart cards aligned while making better
-    # use of desktop width. Streamlit naturally stacks columns on narrow screens.
-    groups: list[tuple[list[dict], list[float]]] = []
-    if charts:
-        groups.append((charts[:2], [1.45, 1.0] if len(charts[:2]) == 2 else [1.0]))
-    for idx in range(2, len(charts), 3):
-        groups.append((charts[idx:idx + 3], [1.0] * len(charts[idx:idx + 3])))
-
-    for items, widths in groups:
-        cols = st.columns(widths, gap="medium")
+    for idx in range(0, len(charts), 2):
+        items = charts[idx:idx + 2]
+        cols = st.columns([1.25, 1.0][:len(items)], gap="medium")
         for col_w, item in zip(cols, items):
             with col_w:
                 cid = item.get("id", str(uuid.uuid4()))
@@ -709,7 +734,6 @@ def _render_chart_cards(charts: list[dict]) -> None:
                 kind = str(item.get("kind") or "")
                 cols_used = item.get("cols_used", []) or []
                 cols_lbl = " · ".join(map(str, cols_used)) if cols_used else ""
-
                 with st.container(border=True):
                     title_col, action_col = st.columns([12, 1], vertical_alignment="top")
                     with title_col:
@@ -722,26 +746,25 @@ def _render_chart_cards(charts: list[dict]) -> None:
                     with action_col:
                         if st.button("×", key=f"del_{cid}", help="Remove chart"):
                             deleted.append(cid)
-
                     try:
                         chart = item.get("chart")
                         if chart is None:
                             st.info("This chart could not be built from the available data.")
                             continue
-                        # Vega-Lite rejects title=None (JSON null). Use a valid
-                        # empty title string because the card heading is rendered above.
                         chart = chart.properties(title="")
+                        # Explicit responsive sizing prevents Altair's default
+                        # width from overflowing narrow Streamlit columns.
+                        chart = chart.properties(width="container")
                         needs_cfg = kind not in ("donut", "corr", "cat_cat")
                         if needs_cfg:
                             chart = (chart
                                 .configure_axis(labelFontSize=10, titleFontSize=11,
                                                 labelColor="#52698e", titleColor="#14264a",
-                                                gridColor="#edf2fa")
+                                                gridColor="#edf2fa", labelLimit=220)
                                 .configure_legend(labelFontSize=10, titleFontSize=10))
                         st.altair_chart(chart, use_container_width=True)
                     except Exception as exc:
                         st.warning(f"Unable to render this chart: {exc}")
-
     if deleted:
         deleted_ids = set(deleted)
         st.session_state.eda_charts = [
@@ -1014,18 +1037,24 @@ def main():
     if nav == "eda":
         st.markdown(
             "<style>"
-            "iframe[title='autolytics_workspace']{position:fixed!important;"
-            "left:0!important;top:0!important;width:188px!important;height:100vh!important;"
+            "iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{"
+            "position:fixed!important;left:0!important;top:0!important;width:"
+            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
+            + "!important;height:100vh!important;min-height:100vh!important;"
             "z-index:1000!important;display:block!important;border:0!important;}"
-            "[data-testid='stCustomComponentV1']{height:0!important;min-height:0!important;"
+            "[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;"
+            "width:0!important;height:0!important;min-width:0!important;min-height:0!important;"
             "padding:0!important;margin:0!important;overflow:visible!important;}"
-            "[data-testid='stMainBlockContainer']{margin-left:188px!important;"
-            "width:calc(100% - 188px)!important;max-width:none!important;"
-            "padding:14px 14px 18px!important;box-sizing:border-box!important;}"
+            "[data-testid='stMainBlockContainer']{position:relative!important;margin-left:"
+            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
+            + "!important;width:calc(100% - "
+            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
+            + ")!important;max-width:none!important;padding:14px 18px 18px!important;"
+            "box-sizing:border-box!important;}"
             ".chart-title{font-size:13px!important;}"
-            "@media(max-width:700px){iframe[title='autolytics_workspace']{width:64px!important;}"
-            "[data-testid='stMainBlockContainer']{margin-left:64px!important;"
-            "width:calc(100% - 64px)!important;padding:8px!important;}}"
+            "@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;}}"
+            "@media(max-width:520px){[data-testid='stMainBlockContainer']{margin-left:64px!important;"
+            "width:calc(100% - 64px)!important;}}"
             "</style>",
             unsafe_allow_html=True,
         )

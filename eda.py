@@ -443,20 +443,31 @@ def chart_timeseries(df: pd.DataFrame, date_col: str,
     s = s.dropna(subset=[date_col, value_col])
     if len(s) < _MIN_ROWS:
         return None
-    # Aggregate by month for readability
-    s["_period"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+    # Choose yearly aggregation for long spans and truthful axis labels.
+    span_days = int((s[date_col].max() - s[date_col].min()).days)
+    if span_days >= 730:
+        s["_period"] = s[date_col].dt.to_period("Y").dt.to_timestamp()
+        axis_title, axis_format, axis_angle = "Year", "%Y", 0
+    else:
+        s["_period"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+        multi_year = s[date_col].dt.year.nunique() > 1
+        axis_title = "Month / Year" if multi_year else "Month"
+        axis_format = "%b %Y" if multi_year else "%b"
+        axis_angle = -40 if multi_year else 0
     agg = s.groupby("_period")[value_col].sum().reset_index()
     agg.columns = ["period", value_col]
     chart = (
         alt.Chart(agg)
         .mark_line(point=True, color=color)
         .encode(
-            alt.X("period:T", title="Date"),
+            alt.X("period:T", title=axis_title,
+                  axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                labelOverlap=False, labelLimit=100)),
             alt.Y(f"{value_col}:Q", title=value_col),
-            tooltip=[alt.Tooltip("period:T", title="Month"),
+            tooltip=[alt.Tooltip("period:T", title=axis_title, format=axis_format),
                      alt.Tooltip(f"{value_col}:Q")],
         )
-        .properties(title=f"{value_col} over Time", height=260)
+        .properties(title=f"{value_col} over Time", height=280)
     )
     return chart
 
@@ -549,16 +560,18 @@ def chart_cat_cat_grouped(df: pd.DataFrame, col_a: str, col_b: str,
     height = max(220, len(top_a) * max(20, int(200 / max(n_b, 1))))
     height = min(height, 480)
 
+    height = min(520, max(260, len(top_a) * 34))
     chart = (
         alt.Chart(agg)
         .mark_bar()
         .encode(
-            alt.X(f"{col_a}:N", sort="-y", title=col_a,
-                  axis=alt.Axis(labelAngle=-35, labelLimit=120)),
-            alt.Y("count:Q", title="Record Count"),
+            alt.Y(f"{col_a}:N", sort="-x", title=col_a,
+                  axis=alt.Axis(labelLimit=220, labelOverlap=False)),
+            alt.X("count:Q", title="Record Count"),
             alt.Color(f"{col_b}:N",
                       scale=alt.Scale(range=_PALETTE),
-                      legend=alt.Legend(title=col_b, labelLimit=120)),
+                      legend=alt.Legend(title=col_b, labelLimit=180,
+                                        orient="bottom", columns=3)),
             alt.Order(f"{col_b}:N"),
             tooltip=[f"{col_a}:N", f"{col_b}:N",
                      alt.Tooltip("count:Q", title="Count")],
@@ -611,22 +624,33 @@ def chart_time_cat(df: pd.DataFrame, date_col: str, cat_col: str,
         return None
     top_cats = s[cat_col].value_counts().head(max_cats).index.tolist()
     s = s[s[cat_col].isin(top_cats)]
-    s["_period"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+    span_days = int((s[date_col].max() - s[date_col].min()).days)
+    if span_days >= 730:
+        s["_period"] = s[date_col].dt.to_period("Y").dt.to_timestamp()
+        axis_title, axis_format, axis_angle = "Year", "%Y", 0
+    else:
+        s["_period"] = s[date_col].dt.to_period("M").dt.to_timestamp()
+        multi_year = s[date_col].dt.year.nunique() > 1
+        axis_title = "Month / Year" if multi_year else "Month"
+        axis_format = "%b %Y" if multi_year else "%b"
+        axis_angle = -40 if multi_year else 0
     agg = s.groupby(["_period", cat_col]).size().reset_index(name="count")
     agg.columns = ["period", cat_col, "count"]
     chart = (
         alt.Chart(agg)
         .mark_line(point=True)
         .encode(
-            alt.X("period:T", title="Date"),
+            alt.X("period:T", title=axis_title,
+                  axis=alt.Axis(format=axis_format, labelAngle=axis_angle,
+                                labelOverlap=False, labelLimit=100)),
             alt.Y("count:Q", title="Record Count"),
             alt.Color(f"{cat_col}:N",
                       scale=alt.Scale(range=_PALETTE),
-                      legend=alt.Legend(title=cat_col)),
-            tooltip=["period:T", f"{cat_col}:N",
-                     alt.Tooltip("count:Q", title="Count")],
+                      legend=alt.Legend(title=cat_col, orient="bottom", columns=3)),
+            tooltip=[alt.Tooltip("period:T", title=axis_title, format=axis_format),
+                     f"{cat_col}:N", alt.Tooltip("count:Q", title="Count")],
         )
-        .properties(title=f"{cat_col} Counts over Time", height=260)
+        .properties(title=f"{cat_col} Counts over Time", height=280)
     )
     return chart
 
