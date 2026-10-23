@@ -3,3 +3,10 @@ pandas>=2.0
 openpyxl>=3.1
 python-dotenv>=1.0
 numpy>=1.24
+altair>=5.0
+
+# Optional: LLM-powered query translation (set OPENAI_API_KEY to enable)
+openai>=1.30
+
+# Optional: DuckDB query engine (SQLite is used as fallback when not installed)
+duckdb>=0.10

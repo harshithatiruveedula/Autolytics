@@ -42,9 +42,11 @@ def build_report_markdown(
         lines.append("```sql")
         lines.append(str(query_payload["sql"]))
         lines.append("```")
-        result = query_payload.get("result")
-        if isinstance(result, pd.DataFrame):
-            lines.append(f"Returned {len(result):,} row(s).")
+        # query_payload stores row count under "count" and raw rows under "rows";
+        # there is no "result" DataFrame key at this layer.
+        result_count = query_payload.get("count")
+        if result_count is not None:
+            lines.append(f"Returned {int(result_count):,} row(s).")
         lines.append("")
     if model_result and model_result.get("metrics"):
         lines.append("## Model")

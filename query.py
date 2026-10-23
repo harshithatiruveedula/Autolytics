@@ -949,6 +949,40 @@ def prepare_dataframe(df: pd.DataFrame) -> None:
     _connection_for_dataframe(df)
 
 
+# ---------------------------------------------------------------------------
+# Sensitive-column masking
+# ---------------------------------------------------------------------------
+
+# Columns whose raw values must never appear in public-facing query results.
+# Matching is case-insensitive against the full column name. Extend as needed.
+_SENSITIVE_TOKENS: tuple[str, ...] = (
+    "card_number", "card number", "cardnumber",
+    "cvv", "cvc", "security code",
+    "ssn", "social security",
+    "password", "passwd",
+    "pin",
+)
+
+
+def _mask_sensitive_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Replace values in sensitive columns with '***' before returning to the UI.
+
+    Only columns whose lowercased name contains a known sensitive token are
+    masked. The original DataFrame is never mutated; a copy is returned only
+    when at least one column needs masking.
+    """
+    cols_to_mask = [
+        col for col in df.columns
+        if any(token in str(col).lower() for token in _SENSITIVE_TOKENS)
+    ]
+    if not cols_to_mask:
+        return df
+    masked = df.copy()
+    for col in cols_to_mask:
+        masked[col] = "***"
+    return masked
+
+
 def execute_sql(df: pd.DataFrame, sql: str) -> tuple[pd.DataFrame, bool]:
     """Run validated SELECT SQL against the dataframe without bulk-copying it.
 
@@ -993,7 +1027,7 @@ def execute_sql(df: pd.DataFrame, sql: str) -> tuple[pd.DataFrame, bool]:
     truncated = len(result) > RESULT_ROW_LIMIT
     if truncated:
         result = result.head(RESULT_ROW_LIMIT)
-    return result, truncated
+    return _mask_sensitive_columns(result), truncated
 
 
 def _friendly_sql_error(exc: Exception) -> str:
@@ -1019,7 +1053,7 @@ def run_user_query(df: pd.DataFrame, text: str) -> dict[str, Any]:
         first_rows = re.search(r"\b(?:show|list|display|get|give|fetch)?\s*(?:me\s+)?(?:the\s+)?first\s+(\d+)\s+rows?\b", normalized)
         if first_rows:
             n = max(1, min(int(first_rows.group(1)), RESULT_ROW_LIMIT))
-            result = df.head(n).copy()
+            result = _mask_sensitive_columns(df.head(n).copy())
             return {"sql": f"SELECT * FROM {TABLE_NAME} LIMIT {n}", "generated_sql": None, "result": result, "truncated": len(df) > n}
         # Handle common full-dataset count requests directly with pandas. This
         # avoids constructing a complete in-memory SQLite copy on the first query.
@@ -1044,7 +1078,7 @@ def run_user_query(df: pd.DataFrame, text: str) -> dict[str, Any]:
             if wants_count_fast and not wants_sum_fast:
                 counts_fast = df[col_fast].value_counts(dropna=True).rename_axis("category").reset_index(name="record_count")
                 counts_fast = counts_fast.head(RESULT_ROW_LIMIT)
-                return {"sql": f"SELECT {_sql_col(col_fast)} AS category, COUNT(*) AS record_count FROM {TABLE_NAME} GROUP BY {_sql_col(col_fast)} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}", "generated_sql": None, "result": counts_fast, "truncated": df[col_fast].nunique(dropna=True) > RESULT_ROW_LIMIT}
+                return {"sql": f"SELECT {_sql_col(col_fast)} AS category, COUNT(*) AS record_count FROM {TABLE_NAME} GROUP BY {_sql_col(col_fast)} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}", "generated_sql": None, "result": _mask_sensitive_columns(counts_fast), "truncated": df[col_fast].nunique(dropna=True) > RESULT_ROW_LIMIT}
             if wants_sum_fast and _numeric(df, col_fast):
                 total_fast = pd.to_numeric(df[col_fast], errors="coerce").sum()
                 return {"sql": f"SELECT SUM({_sql_col(col_fast)}) AS total_value FROM {TABLE_NAME}", "generated_sql": None, "result": pd.DataFrame({"total_value": [total_fast]}), "truncated": False}
@@ -1074,7 +1108,7 @@ def run_user_query(df: pd.DataFrame, text: str) -> dict[str, Any]:
                 series = df[primary_col].dropna()
                 counts = series.value_counts(dropna=True).rename_axis("category").reset_index(name="record_count")
                 counts = counts.head(RESULT_ROW_LIMIT)
-                return {"sql": validate_sql(sql), "generated_sql": generated_sql, "result": counts, "truncated": len(series.unique()) > RESULT_ROW_LIMIT}
+                return {"sql": validate_sql(sql), "generated_sql": generated_sql, "result": _mask_sensitive_columns(counts), "truncated": len(series.unique()) > RESULT_ROW_LIMIT}
             if wants_sum and _numeric(df, primary_col) and not wants_count_word:
                 total = pd.to_numeric(df[primary_col], errors="coerce").sum()
                 return {"sql": validate_sql(sql), "generated_sql": generated_sql, "result": pd.DataFrame({"total_value": [total]}), "truncated": False}
