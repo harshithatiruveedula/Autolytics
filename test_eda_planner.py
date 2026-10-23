@@ -1,7 +1,6 @@
 """Logic test for the EDA chart planner — verifies combination charts are generated."""
 import sys, os
-sys.path.insert(0, r'e:\Autolytics')
-os.chdir(r'e:\Autolytics')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import uuid
 import pandas as pd

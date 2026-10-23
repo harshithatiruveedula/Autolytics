@@ -28,7 +28,7 @@ st.markdown("""
 [data-testid="stToolbar"]           { right:0.5rem; }
 [data-testid="stMainBlockContainer"]{ max-width:100%!important;padding:0!important; }
 [data-testid="stAppViewContainer"] > .main { padding-top:0!important; }
-[data-testid="stVerticalBlock"]     { gap:0!important; }
+[data-testid="stVerticalBlock"]     { gap:0.65rem!important; }
 iframe[title="autolytics_workspace"]{ width:100%!important;border:0!important; }
 
 /* ── EDA page ────────────────────────────────────────────────────────────── */
@@ -367,7 +367,7 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
         elif kind == "timeseries_count":
             date_col = cols[0]
             s = df[[date_col]].dropna().copy()
-            s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+            s[date_col] = pd.to_datetime(s[date_col], errors="coerce", dayfirst=True)
             s = s.dropna()
             if len(s) < _MIN:
                 return None
@@ -388,7 +388,7 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
         elif kind == "timeseries_cat":
             date_col, cat_col = cols[0], cols[1]
             s = df[[date_col, cat_col]].dropna().copy()
-            s[date_col] = pd.to_datetime(s[date_col], errors="coerce")
+            s[date_col] = pd.to_datetime(s[date_col], errors="coerce", dayfirst=True)
             s = s.dropna(subset=[date_col])
             if len(s) < _MIN:
                 return None
@@ -502,7 +502,7 @@ def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
     charts: list[dict] = []
 
     if domain["is_healthcare"]:
-        plan = plan_hospital_charts(df, mappings, max_charts=8)
+        plan = plan_hospital_charts(df, mappings, max_charts=10)
         for spec in plan:
             result = _make_chart(df, spec)
             if result is not None:
@@ -678,65 +678,56 @@ def _render_kpi_cards(kpis: list[dict]) -> None:
 
 
 def _render_chart_cards(charts: list[dict]) -> None:
-    """Render charts 2-up in a responsive grid; each card has a Remove button."""
-    current  = list(charts)
-    pairs    = [current[i:i + 2] for i in range(0, len(current), 2)]
+    """Render stable two-column chart cards using native Streamlit containers."""
+    pairs = [charts[i:i + 2] for i in range(0, len(charts), 2)]
     deleted: list[str] = []
 
     for pair in pairs:
         col_widgets = st.columns(len(pair), gap="medium")
         for col_w, item in zip(col_widgets, pair):
             with col_w:
-                cid       = item["id"]
-                title     = item.get("title", "Chart")
-                desc      = item.get("desc", "")
-                kind      = item.get("kind", "")
+                cid = item["id"]
+                title = item.get("title", "Chart")
+                desc = item.get("desc", "")
+                kind = item.get("kind", "")
                 cols_used = item.get("cols_used", [])
-                cols_lbl  = " · ".join(cols_used) if cols_used else ""
+                cols_lbl = " · ".join(map(str, cols_used)) if cols_used else ""
 
-                # Card header HTML
-                st.markdown(
-                    f"<div class='chart-card'>"
-                    f"<div class='chart-title'>{title}</div>"
-                    f"<div class='chart-desc'>{desc}</div>"
-                    + (f"<div class='chart-cols'>Columns: {cols_lbl}</div>"
-                       if cols_lbl else "")
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
+                # Keep the heading, remove action, and visualization in one
+                # Streamlit-owned bordered container. This avoids closing an
+                # HTML card before the chart is rendered as a separate element.
+                with st.container(border=True):
+                    title_col, action_col = st.columns([9, 1])
+                    with title_col:
+                        st.markdown(
+                            f"<div class='chart-title'>{title}</div>"
+                            f"<div class='chart-desc'>{desc}</div>"
+                            + (f"<div class='chart-cols'>Columns: {cols_lbl}</div>" if cols_lbl else ""),
+                            unsafe_allow_html=True,
+                        )
+                    with action_col:
+                        if st.button("✕", key=f"del_{cid}", help="Remove chart"):
+                            deleted.append(cid)
 
-                # Delete button (right-aligned)
-                _, del_col = st.columns([9, 1])
-                with del_col:
-                    if st.button("✕", key=f"del_{cid}", help="Remove chart"):
-                        deleted.append(cid)
-
-                # Altair chart
-                try:
-                    c = item["chart"]
-                    # configure_* makes it top-level; skip for already-configured kinds
-                    needs_cfg = kind not in ("donut", "corr", "cat_cat")
-                    if needs_cfg:
-                        c = (c
-                             .configure_axis(
-                                 labelFontSize=10, titleFontSize=11,
-                                 labelColor="#52698e", titleColor="#14264a",
-                             )
-                             .configure_title(
-                                 fontSize=13, fontWeight=700,
-                                 color="#14264a", anchor="start",
-                             )
-                             .configure_legend(
-                                 labelFontSize=10, titleFontSize=10,
-                             ))
-                    st.altair_chart(c, use_container_width=True)
-                except Exception as exc:
-                    st.caption(f"Chart unavailable: {exc}")
+                    try:
+                        chart = item["chart"].properties(title=None)
+                        needs_cfg = kind not in ("donut", "corr", "cat_cat")
+                        if needs_cfg:
+                            chart = (chart
+                                .configure_axis(labelFontSize=10, titleFontSize=11,
+                                                labelColor="#52698e", titleColor="#14264a")
+                                .configure_title(fontSize=13, fontWeight=700,
+                                                 color="#14264a", anchor="start")
+                                .configure_legend(labelFontSize=10, titleFontSize=10))
+                        st.altair_chart(chart, use_container_width=True)
+                    except Exception as exc:
+                        st.caption(f"Chart unavailable: {exc}")
 
     if deleted:
+        deleted_ids = set(deleted)
         st.session_state.eda_charts = [
-            ch for ch in (st.session_state.eda_charts or [])
-            if ch["id"] not in deleted
+            chart for chart in (st.session_state.eda_charts or [])
+            if chart["id"] not in deleted_ids
         ]
         st.rerun()
 

@@ -1,7 +1,6 @@
 """Tests for domain.py — semantic mapping and hospital chart planner."""
 import sys, os
-sys.path.insert(0, r'e:\Autolytics')
-os.chdir(r'e:\Autolytics')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd
 import numpy as np

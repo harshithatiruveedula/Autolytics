@@ -38,7 +38,7 @@ _HC_SYNONYMS: dict[str, list[str]] = {
     ],
     "billing": [
         "billing amount", "billing", "amount", "cost", "charge", "charges",
-        "total charge", "total cost", "treatment cost", "medical cost",
+        "total charge", "total cost", "treatment cost", "medical cost", "bill amount", "medical bill",
         "healthcare cost", "medical expense", "expense", "total charges",
         "healthcare expenses", "fee", "total fee", "payment amount",
     ],
@@ -73,7 +73,7 @@ _HC_SYNONYMS: dict[str, list[str]] = {
     "los": [
         "length of stay", "los", "stay duration", "hospital stay",
         "stay", "days stayed", "days in hospital", "length_of_stay",
-        "lengthofstay",
+        "lengthofstay", "hospital stay duration", "hospital stay duration days",
     ],
     "waiting_time": [
         "waiting time", "wait time", "queue time", "wait duration",
@@ -228,7 +228,7 @@ def map_columns(df: pd.DataFrame,
                 if not pd.api.types.is_datetime64_any_dtype(series):
                     sample = series.dropna().head(20)
                     try:
-                        parsed = pd.to_datetime(sample, errors="coerce")
+                        parsed = pd.to_datetime(sample, errors="coerce", dayfirst=True)
                         if parsed.notna().mean() < 0.7:
                             continue
                     except Exception:
@@ -530,11 +530,12 @@ def plan_hospital_charts(df: pd.DataFrame,
             "cols": [c_los],
         })
 
-    # Gender breakdown
-    c_gender = safe("gender", 2, 5)
+    # Gender distribution is a core hospital chart, not a low-priority extra.
+    # Keep it ahead of optional billing/LOS charts so it survives chart limits.
+    c_gender = safe("gender", 2, 10)
     if c_gender:
         candidates.append({
-            "priority": 23,
+            "priority": 9,
             "title": f"Patient Distribution by Gender",
             "desc": f"Record count by {c_gender}.",
             "kind": "bar",
