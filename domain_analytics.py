@@ -324,10 +324,17 @@ def _time_count(df: pd.DataFrame, date_col: str, title: str, desc: str, value_co
     else:
         s["period"] = s["date"].dt.to_period("M").dt.to_timestamp()
         agg = s.groupby("period")["value"].sum().reset_index()
-        x = alt.X("period:T", title="Month / Year" if s["date"].dt.year.nunique()>1 else "Month",
-                  axis=alt.Axis(format="%b %Y" if s["date"].dt.year.nunique()>1 else "%b", labelAngle=-35 if s["date"].dt.year.nunique()>1 else 0, tickCount=8, labelOverlap="greedy"))
+        multi_year = s["date"].dt.year.nunique() > 1
+        # Always initialise the axis title before constructing tooltip encodings.
+        # Previously axis_title was only assigned in the annual branch, causing
+        # UnboundLocalError for common ecommerce datasets spanning <= 730 days.
+        axis_title = "Month / Year" if multi_year else "Month"
+        axis_format = "%b %Y" if multi_year else "%b"
+        axis_angle = -35 if multi_year else 0
+        x = alt.X("period:T", title=axis_title,
+                  axis=alt.Axis(format=axis_format, labelAngle=axis_angle, tickCount=8, labelOverlap="greedy"))
     y_title = f"Total {value_col}" if value_col else "Record Count"
-    period_tooltip = alt.Tooltip("period:N", title=axis_title) if span > 730 else alt.Tooltip("period:T", title=axis_title, format="%b %Y")
+    period_tooltip = alt.Tooltip("period:N", title=axis_title) if span > 730 else alt.Tooltip("period:T", title=axis_title, format=axis_format)
     c = alt.Chart(agg).mark_line(point=True, color=PALETTE[0]).encode(
         x=x, y=alt.Y("value:Q", title=y_title), tooltip=[period_tooltip, alt.Tooltip("value:Q", title=y_title)]
     ).properties(height=270)

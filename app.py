@@ -879,20 +879,21 @@ def _render_eda_page() -> None:
     insights = st.session_state.eda_insights or []
     suggestions = st.session_state.get("eda_suggestions") or []
     story = st.session_state.get("eda_story") or ""
+    # Keep the requested analytical sequence: WHAT → WHY → WHAT TO DO.
     if charts and insights:
         st.markdown("<div class='sec-head' style='margin-top:24px'>💡 Key Insights</div>", unsafe_allow_html=True)
         for ins in insights:
             safe_insight = html.escape(str(ins).replace("**", ""))
             st.markdown(f"<div class='insight-bar'>• {safe_insight}</div>", unsafe_allow_html=True)
+    if charts and story:
+        st.markdown("<div class='sec-head' style='margin-top:24px'>📖 Data Storytelling</div>", unsafe_allow_html=True)
+        safe_story = html.escape(str(story)).replace("\n\n", "<br><br>").replace("\n", "<br>")
+        st.markdown("<div class='chart-card' style='font-size:12px;color:#355078;line-height:1.8'>" + safe_story + "</div>", unsafe_allow_html=True)
     if charts and suggestions:
         st.markdown("<div class='sec-head' style='margin-top:24px'>🧭 Suggestions</div>", unsafe_allow_html=True)
         for suggestion in suggestions:
             safe_suggestion = html.escape(str(suggestion))
             st.markdown(f"<div class='insight-bar'>→ {safe_suggestion}</div>", unsafe_allow_html=True)
-    if charts and story:
-        st.markdown("<div class='sec-head' style='margin-top:24px'>📖 Data Storytelling</div>", unsafe_allow_html=True)
-        safe_story = html.escape(str(story)).replace("\n\n", "<br><br>")
-        st.markdown("<div class='chart-card' style='font-size:12px;color:#355078;line-height:1.8'>" + safe_story + "</div>", unsafe_allow_html=True)
 
     # ── 8. Data overview tabs ─────────────────────────────────────────────────
     st.markdown(
@@ -935,38 +936,6 @@ def _render_eda_page() -> None:
         else:
             st.dataframe(c_df.round(3), use_container_width=True)
 
-    # ── 9. Downloads ─────────────────────────────────────────────────────────
-    st.markdown(
-        "<hr style='border:0;border-top:1px solid #e4ebf6;margin:24px 0 14px'>",
-        unsafe_allow_html=True,
-    )
-    dl1, dl2, dl3, dl4 = st.columns(4)
-    with dl1:
-        st.download_button(
-            "📄 EDA Summary (CSV)", data=_build_eda_csv(),
-            file_name="eda_summary.csv", mime="text/csv",
-            use_container_width=True,
-        )
-    with dl2:
-        st.download_button(
-            "📋 EDA Report (TXT)",
-            data=_build_report_text(st.session_state.filename),
-            file_name="eda_report.txt", mime="text/plain",
-            use_container_width=True,
-        )
-    with dl3:
-        st.download_button(
-            "📊 Export Dataset (CSV)",
-            data=df.to_csv(index=False).encode("utf-8"),
-            file_name=f"cleaned_{st.session_state.filename or 'dataset.csv'}",
-            mime="text/csv", use_container_width=True,
-        )
-    with dl4:
-        st.download_button(
-            "📕 PDF Report", data=_build_report_pdf(st.session_state.filename),
-            file_name="autolytics_eda_report.pdf", mime="application/pdf",
-            use_container_width=True,
-        )
 
 
 def _build_report_pdf(filename: str | None) -> bytes:
