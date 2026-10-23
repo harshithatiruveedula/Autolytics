@@ -17,6 +17,7 @@ def build_report_markdown(
     cleaning_summary: dict[str, Any] | None,
     query_payload: dict[str, Any] | None = None,
     model_result: dict[str, Any] | None = None,
+    analysis_payload: dict[str, Any] | None = None,
 ) -> str:
     lines = [
         "# AUTOLYTICS Report",
@@ -54,5 +55,20 @@ def build_report_markdown(
         for key, value in metrics.items():
             lines.append(f"- **{key}:** {value}")
         lines.append("")
+    if analysis_payload:
+        domain_label = analysis_payload.get("domain")
+        if domain_label:
+            lines.extend(["", "## Detected domain", str(domain_label)])
+        for key, heading in (("key_insights", "Key Insights"), ("suggestions", "Suggestions")):
+            items = analysis_payload.get(key) or []
+            lines.extend(["", f"## {heading}"])
+            lines.extend([f"- {str(item).replace('**', '')}" for item in items] or ["No supported findings available."])
+        story = str(analysis_payload.get("story") or "").strip()
+        if story:
+            lines.extend(["", "## Data Storytelling", story])
+        chart_titles = analysis_payload.get("chart_titles") or []
+        if chart_titles:
+            lines.extend(["", "## Generated chart references"])
+            lines.extend([f"- {title}" for title in chart_titles])
     lines.append("The original uploaded file is unchanged. This report uses the cleaned working copy.")
     return "\n".join(lines)

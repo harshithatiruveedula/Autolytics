@@ -10,3 +10,6 @@ openai>=1.30
 
 # Optional: DuckDB query engine (SQLite is used as fallback when not installed)
 duckdb>=0.10
+
+# PDF report export
+reportlab>=4.0

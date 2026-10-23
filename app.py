@@ -4,6 +4,7 @@ load_dotenv()
 
 import base64
 import gzip
+import html
 import uuid
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -105,6 +106,9 @@ def init_state():
         "eda_dataset_id": None,
         # domain detection result
         "eda_domain": None,
+        "eda_domain_info": None,
+        "eda_suggestions": None,
+        "eda_story": None,
         # generated charts: list[{id, title, desc, kind, cols_used, chart}]
         "eda_charts": None,
         "eda_error": None,
@@ -177,7 +181,8 @@ def process_event(event) -> bool:
                     "cleaning_summary", "query_payload", "query_error",
                     "eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                     "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
-                    "eda_charts", "eda_dataset_id", "eda_error", "eda_domain"):
+                    "eda_charts", "eda_dataset_id", "eda_error", "eda_domain",
+                    "eda_domain_info", "eda_suggestions", "eda_story"):
             st.session_state[key] = None if key != "file_size" else 0
         st.session_state.preview_page = 1
         st.session_state.upload_error = None
@@ -208,7 +213,8 @@ def process_event(event) -> bool:
             st.session_state.preview_page = 1
             for key in ("eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                         "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
-                        "eda_charts", "eda_dataset_id", "eda_error", "eda_domain"):
+                        "eda_charts", "eda_dataset_id", "eda_error", "eda_domain",
+                    "eda_domain_info", "eda_suggestions", "eda_story"):
                 st.session_state[key] = None
         except Exception as exc:
             st.session_state.upload_error = str(exc)
@@ -576,157 +582,51 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
-    """Detect domain, run the appropriate chart planner, return chart dicts."""
-    from domain import detect_domain, plan_hospital_charts
-    from eda import classify_columns
+    """Generate domain-specific charts and evidence-backed narrative outputs."""
+    from domain import detect_domain as detect_healthcare, plan_hospital_charts
+    from domain_analytics import detect_domain_and_roles, build_domain_charts, generate_narrative
 
-    domain = detect_domain(df)
-    st.session_state.eda_domain = domain
-    mappings = domain["mappings"]
+    domain_info = detect_domain_and_roles(df)
+    narrative = generate_narrative(df, domain_info)
+    st.session_state.eda_domain_info = domain_info
+    st.session_state.eda_insights = narrative.get("insights", [])
+    st.session_state.eda_suggestions = narrative.get("suggestions", [])
+    st.session_state.eda_story = narrative.get("story", "")
+    # Existing app banner and report code expect the legacy healthcare flag.
+    legacy_domain = detect_healthcare(df)
+    legacy_domain["domain_name"] = domain_info.get("name", "generic")
+    legacy_domain["domain_label"] = domain_info.get("label", "General")
+    legacy_domain["is_healthcare"] = domain_info.get("name") == "healthcare" or legacy_domain.get("is_healthcare", False)
+    legacy_domain["confidence"] = max(float(legacy_domain.get("confidence", 0)), float(domain_info.get("confidence", 0)))
+    st.session_state.eda_domain = legacy_domain
 
-    charts: list[dict] = []
+    # Build charts from semantic roles first. These are single-metric charts;
+    # category breakdowns are used only when they are meaningful for the domain.
+    charts = build_domain_charts(df, domain_info, max_charts=20)
 
-    if domain["is_healthcare"]:
-        plan = plan_hospital_charts(df, mappings, max_charts=14)
-        # Build the core admission chart first so optional plots cannot push it
-        # out of the visible chart set.
-        admission_specs = [s for s in plan if s.get("title") == "Admission Type by Medical Condition"]
-        ordered_specs = admission_specs + [s for s in plan if s not in admission_specs]
-        for spec in ordered_specs:
-            result = _make_chart(df, spec)
-            if result is not None:
-                charts.append(result)
-
-        # Be resilient to unfamiliar healthcare schemas: if semantic planning
-        # yields too few charts, add valid generic charts from the actual data
-        # types rather than leaving the page nearly empty.
-        if len(charts) < 4:
-            from eda import classify_columns
-            info = classify_columns(df)
-            existing_cols = {c for chart in charts for c in chart.get("cols_used", [])}
-            fallback_specs = []
-            for date_col in info.get("datetime", [])[:2]:
-                if date_col not in existing_cols:
-                    fallback_specs.append({"kind": "timeseries_count", "title": f"Records over Time — {date_col}",
-                                           "desc": f"Record counts aggregated over time using {date_col}.", "cols": [date_col]})
-            for cat_col in info.get("categorical", []):
-                if cat_col in existing_cols:
-                    continue
-                nunique = df[cat_col].nunique(dropna=True)
-                if 2 <= nunique <= 20:
-                    fallback_specs.append({"kind": "bar", "title": f"Distribution of {cat_col}",
-                                           "desc": f"Record count by {cat_col} category.", "cols": [cat_col]})
-                if len(fallback_specs) >= 8:
+    # Retain the mature healthcare planner for additional operational plots,
+    # without allowing it to replace the new charts or duplicate chart titles.
+    if domain_info.get("name") == "healthcare":
+        try:
+            mappings = legacy_domain.get("mappings", {})
+            specs = plan_hospital_charts(df, mappings, max_charts=20)
+            known_titles = {item.get("title") for item in charts}
+            for spec in specs:
+                if len(charts) >= 20:
                     break
-            for num_col in info.get("numeric", []):
-                if num_col not in existing_cols:
-                    fallback_specs.append({"kind": "histogram", "title": f"Distribution of {num_col}",
-                                           "desc": f"Distribution of values in {num_col}.", "cols": [num_col]})
-                if len(fallback_specs) >= 10:
-                    break
-            known_titles = {c["title"] for c in charts}
-            for spec in fallback_specs:
-                if len(charts) >= 14:
-                    break
-                if spec["title"] in known_titles:
+                if spec.get("title") in known_titles:
                     continue
-                result = _make_chart(df, spec)
-                if result is not None:
-                    charts.append(result)
-                    known_titles.add(spec["title"])
-    else:
-        # Generic auto planner for non-hospital datasets
-        import altair as alt
-        _PALETTE = ["#2864f0","#7c3aed","#10b981","#f59e0b","#ef4444",
-                    "#06b6d4","#8b5cf6","#f97316","#14b8a6","#6366f1"]
-        info = classify_columns(df)
-        num_cols = info["numeric"]
-        cat_cols = info["categorical"]
-        dt_cols  = info["datetime"]
-        MAX = 8
-        seen: set[frozenset] = set()
+                item = _make_chart(df, spec)
+                if item:
+                    charts.append(item)
+                    known_titles.add(item.get("title"))
+        except Exception:
+            # A missing optional healthcare metric must not block other charts.
+            pass
 
-        def _add(spec):
-            if len(charts) < MAX:
-                r = _make_chart(df, spec)
-                if r:
-                    charts.append(r)
-
-        # Time series
-        for dt_col in dt_cols[:1]:
-            _add({"kind": "timeseries_count",
-                  "title": "Records over Time",
-                  "desc": f"Monthly record counts from {dt_col}.",
-                  "cols": [dt_col]})
-
-        # Cat × Num grouped bars
-        for cat in cat_cols[:3]:
-            nu = df[cat].nunique(dropna=True)
-            if nu < 2 or nu > 20:
-                continue
-            for num in num_cols[:2]:
-                pk = frozenset([cat, num])
-                if pk in seen:
-                    continue
-                agg = "sum" if any(kw in num.lower() for kw in
-                                   ("amount","sales","revenue","total","billing","price")) else "mean"
-                label = "Total" if agg == "sum" else "Avg"
-                _add({"kind": "cat_num_bar",
-                      "title": f"{label} {num} by {cat}",
-                      "desc": f"{label} {num} per {cat}.",
-                      "cols": [cat, num]})
-                seen.add(pk)
-
-        # Cat × Cat
-        for i, ca in enumerate(cat_cols[:3]):
-            for cb in cat_cols[i + 1:i + 3]:
-                pk = frozenset([ca, cb])
-                if pk in seen:
-                    continue
-                nua = df[ca].nunique(dropna=True)
-                nub = df[cb].nunique(dropna=True)
-                if nua < 2 or nub < 2 or nua > 20 or nub > 20:
-                    continue
-                _add({"kind": "cat_cat",
-                      "title": f"{cb} by {ca}",
-                      "desc": f"Count of {cb} within each {ca}.",
-                      "cols": [ca, cb]})
-                seen.add(pk)
-
-        # Scatter
-        if len(num_cols) >= 2:
-            _add({"kind": "scatter",
-                  "title": f"{num_cols[0]} vs {num_cols[1]}",
-                  "desc": f"Relationship between {num_cols[0]} and {num_cols[1]}.",
-                  "cols": [num_cols[0], num_cols[1]]})
-
-        # Histograms
-        for num in num_cols[:2]:
-            if len(charts) >= MAX:
-                break
-            _add({"kind": "histogram",
-                  "title": f"Distribution of {num}",
-                  "desc": f"Value distribution of {num}.",
-                  "cols": [num]})
-
-        # Category bars
-        for cat in cat_cols[:2]:
-            if len(charts) >= MAX:
-                break
-            if 2 <= df[cat].nunique(dropna=True) <= 20:
-                _add({"kind": "bar",
-                      "title": f"Top {cat} Categories",
-                      "desc": f"Frequency of {cat} values.",
-                      "cols": [cat]})
-
-        # Correlation heatmap
-        if len(num_cols) >= 3 and len(charts) < MAX:
-            _add({"kind": "corr",
-                  "title": "Correlation Heatmap",
-                  "desc": "Pairwise correlations between numerical columns.",
-                  "cols": num_cols[:8]})
-
-    return charts
+    # If chart libraries are unavailable or the schema is unusually sparse,
+    # let the caller display the narrative and generic profile without crashing.
+    return charts[:20]
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +682,13 @@ def build_component_data() -> dict:
         "eda_has_data": st.session_state.cleaned_df is not None,
         "eda_has_result": bool(charts),
         "eda_error": st.session_state.eda_error,
+        "eda_analysis": {
+            "domain": (st.session_state.get("eda_domain_info") or {}).get("label", "General"),
+            "key_insights": st.session_state.get("eda_insights") or [],
+            "suggestions": st.session_state.get("eda_suggestions") or [],
+            "story": st.session_state.get("eda_story") or "",
+            "chart_titles": [c.get("title", "Chart") for c in (charts or [])],
+        },
         "filename": st.session_state.filename,
     }
 
@@ -938,7 +845,7 @@ def _render_eda_page() -> None:
     kpis = st.session_state.eda_kpis or []
     if kpis:
         st.markdown(
-            "<div class='sec-head'>📌 Key Insights "
+            "<div class='sec-head'>📌 Key Metrics "
             "<span style='font-size:11px;font-weight:400;color:#94a3b8'>"
             "(Auto-generated)</span></div>",
             unsafe_allow_html=True,
@@ -949,14 +856,16 @@ def _render_eda_page() -> None:
     charts = st.session_state.eda_charts
     if charts:
         domain = st.session_state.eda_domain
-        if domain and domain.get("is_healthcare"):
-            st.markdown(
-                "<div style='background:#ecfdf4;border:1px solid #a3e6c7;"
-                "border-radius:8px;padding:7px 14px;font-size:12px;color:#166442;"
-                "margin-bottom:12px'>🏥 Healthcare dataset detected — "
-                "showing hospital analysis charts.</div>",
-                unsafe_allow_html=True,
-            )
+        domain_info = st.session_state.get("eda_domain_info") or {}
+        domain_label = domain_info.get("label", "General")
+        domain_icons = {"Healthcare": "🏥", "E-commerce": "🛍️", "Finance": "💳", "Education": "🎓", "General": "📊"}
+        st.markdown(
+            "<div style='background:#eef6ff;border:1px solid #cfe0ff;"
+            "border-radius:8px;padding:7px 14px;font-size:12px;color:#244d91;"
+            "margin-bottom:12px'>" + domain_icons.get(domain_label, "📊") + " " +
+            domain_label + " dataset detected — showing relevant analysis charts.</div>",
+            unsafe_allow_html=True,
+        )
         _render_chart_cards(charts)
     else:
         st.markdown(
@@ -966,16 +875,24 @@ def _render_eda_page() -> None:
             unsafe_allow_html=True,
         )
 
-    # ── 7. Auto-generated insights ────────────────────────────────────────────
+    # ── 7. Evidence-backed narrative outputs (below generated charts) ────────
     insights = st.session_state.eda_insights or []
-    if insights:
-        st.markdown(
-            "<div class='sec-head' style='margin-top:24px'>💡 Key Insights</div>",
-            unsafe_allow_html=True,
-        )
+    suggestions = st.session_state.get("eda_suggestions") or []
+    story = st.session_state.get("eda_story") or ""
+    if charts and insights:
+        st.markdown("<div class='sec-head' style='margin-top:24px'>💡 Key Insights</div>", unsafe_allow_html=True)
         for ins in insights:
-            st.markdown(f"<div class='insight-bar'>• {ins}</div>",
-                        unsafe_allow_html=True)
+            safe_insight = html.escape(str(ins).replace("**", ""))
+            st.markdown(f"<div class='insight-bar'>• {safe_insight}</div>", unsafe_allow_html=True)
+    if charts and suggestions:
+        st.markdown("<div class='sec-head' style='margin-top:24px'>🧭 Suggestions</div>", unsafe_allow_html=True)
+        for suggestion in suggestions:
+            safe_suggestion = html.escape(str(suggestion))
+            st.markdown(f"<div class='insight-bar'>→ {safe_suggestion}</div>", unsafe_allow_html=True)
+    if charts and story:
+        st.markdown("<div class='sec-head' style='margin-top:24px'>📖 Data Storytelling</div>", unsafe_allow_html=True)
+        safe_story = html.escape(str(story)).replace("\n\n", "<br><br>")
+        st.markdown("<div class='chart-card' style='font-size:12px;color:#355078;line-height:1.8'>" + safe_story + "</div>", unsafe_allow_html=True)
 
     # ── 8. Data overview tabs ─────────────────────────────────────────────────
     st.markdown(
@@ -1023,7 +940,7 @@ def _render_eda_page() -> None:
         "<hr style='border:0;border-top:1px solid #e4ebf6;margin:24px 0 14px'>",
         unsafe_allow_html=True,
     )
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2, dl3, dl4 = st.columns(4)
     with dl1:
         st.download_button(
             "📄 EDA Summary (CSV)", data=_build_eda_csv(),
@@ -1044,6 +961,88 @@ def _render_eda_page() -> None:
             file_name=f"cleaned_{st.session_state.filename or 'dataset.csv'}",
             mime="text/csv", use_container_width=True,
         )
+    with dl4:
+        st.download_button(
+            "📕 PDF Report", data=_build_report_pdf(st.session_state.filename),
+            file_name="autolytics_eda_report.pdf", mime="application/pdf",
+            use_container_width=True,
+        )
+
+
+def _build_report_pdf(filename: str | None) -> bytes:
+    """Build a privacy-conscious PDF using the same calculated EDA findings."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_LEFT
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    except ImportError as exc:
+        raise RuntimeError("PDF export requires reportlab. Install the project requirements and try again.") from exc
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=17*mm, leftMargin=17*mm, topMargin=16*mm, bottomMargin=16*mm)
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="AutoTitle", parent=styles["Title"], textColor=colors.HexColor("#14264a"), alignment=TA_LEFT, spaceAfter=8))
+    styles.add(ParagraphStyle(name="AutoSection", parent=styles["Heading2"], textColor=colors.HexColor("#2864f0"), spaceBefore=12, spaceAfter=6))
+    styles.add(ParagraphStyle(name="AutoBody", parent=styles["BodyText"], fontSize=9, leading=13, spaceAfter=5))
+    story_flow = [Paragraph("AUTOLYTICS - EDA Report", styles["AutoTitle"])]
+    df = st.session_state.cleaned_df
+    domain_info = st.session_state.get("eda_domain_info") or {}
+    story_flow.append(Paragraph(f"Dataset: {html.escape(str(filename or 'uploaded dataset'))}", styles["AutoBody"]))
+    if df is not None:
+        story_flow.append(Paragraph(f"Records: {len(df):,} &nbsp;&nbsp; Columns: {len(df.columns):,} &nbsp;&nbsp; Domain: {html.escape(str(domain_info.get('label', 'General')))}", styles["AutoBody"]))
+    story_flow.append(Spacer(1, 4*mm))
+    sections = [
+        ("Key Insights", st.session_state.get("eda_insights") or []),
+        ("Suggestions", st.session_state.get("eda_suggestions") or []),
+    ]
+    for heading, items in sections:
+        story_flow.append(Paragraph(heading, styles["AutoSection"]))
+        if items:
+            for item in items:
+                story_flow.append(Paragraph("&#8226; " + html.escape(str(item).replace("**", "")), styles["AutoBody"]))
+        else:
+            story_flow.append(Paragraph("No supported findings are available yet. Generate EDA after uploading a dataset.", styles["AutoBody"]))
+    story_text = str(st.session_state.get("eda_story") or "").strip()
+    story_flow.append(Paragraph("Data Storytelling", styles["AutoSection"]))
+    if story_text:
+        for para in story_text.split("\n\n"):
+            story_flow.append(Paragraph(html.escape(para), styles["AutoBody"]))
+    charts = st.session_state.get("eda_charts") or []
+    story_flow.append(Paragraph("Generated Chart References", styles["AutoSection"]))
+    if charts:
+        chart_rows = [["Chart", "Columns used"]]
+        for item in charts:
+            chart_rows.append([str(item.get("title", "Chart")), ", ".join(map(str, item.get("cols_used", []) or []))])
+        table = Table(chart_rows, colWidths=[75*mm, 90*mm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#eaf1ff")),
+            ("TEXTCOLOR", (0,0), (-1,0), colors.HexColor("#14264a")),
+            ("GRID", (0,0), (-1,-1), .35, colors.HexColor("#d9e4f5")),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE", (0,0), (-1,-1), 8),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING", (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ]))
+        story_flow.append(table)
+    else:
+        story_flow.append(Paragraph("No charts have been generated yet.", styles["AutoBody"]))
+    profile = st.session_state.get("eda_profile")
+    if profile is not None and not profile.empty:
+        story_flow.append(Paragraph("Column Profile", styles["AutoSection"]))
+        rows = [[str(c) for c in profile.columns]]
+        rows.extend([[str(v) for v in row] for row in profile.head(35).itertuples(index=False, name=None)])
+        widths = [165*mm / max(1, len(rows[0]))] * len(rows[0])
+        table = Table(rows, colWidths=widths, repeatRows=1)
+        table.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#eaf1ff")), ("GRID", (0,0), (-1,-1), .25, colors.HexColor("#d9e4f5")), ("FONTSIZE", (0,0), (-1,-1), 7), ("VALIGN", (0,0), (-1,-1), "TOP")]))
+        story_flow.append(table)
+    story_flow.append(Spacer(1, 5*mm))
+    story_flow.append(Paragraph("This report contains aggregate analysis only; raw records and sensitive identifiers are not included.", styles["AutoBody"]))
+    doc.build(story_flow)
+    return buffer.getvalue()
 
 
 def _build_eda_csv() -> bytes:
@@ -1053,6 +1052,8 @@ def _build_eda_csv() -> bytes:
     missing  = st.session_state.eda_missing
     outliers = st.session_state.eda_outliers
     insights = st.session_state.eda_insights or []
+    suggestions = st.session_state.get("eda_suggestions") or []
+    story = st.session_state.get("eda_story") or ""
     buf.write("=== Column Profile ===\n")
     if profile is not None:
         profile.to_csv(buf, index=False)
@@ -1070,6 +1071,11 @@ def _build_eda_csv() -> bytes:
     buf.write("\n=== Key Insights ===\n")
     for ins in insights:
         buf.write(ins.replace("**", "") + "\n")
+    buf.write("\n=== Suggestions ===\n")
+    for suggestion in suggestions:
+        buf.write(suggestion + "\n")
+    buf.write("\n=== Data Storytelling ===\n")
+    buf.write(story + "\n")
     return buf.getvalue().encode("utf-8")
 
 
@@ -1082,18 +1088,25 @@ def _build_report_text(filename: str | None) -> bytes:
     missing  = st.session_state.eda_missing
     insights = st.session_state.eda_insights or []
     domain   = st.session_state.eda_domain
+    suggestions = st.session_state.get("eda_suggestions") or []
+    story = st.session_state.get("eda_story") or ""
+    domain_info = st.session_state.get("eda_domain_info") or {}
     lines = [
         "AUTOLYTICS — EDA Report", "=" * 50,
         f"Dataset: {filename or 'uploaded dataset'}",
         f"Rows: {n_rows:,}  |  Columns: {n_cols}",
     ]
     if domain:
-        dom_label = "Healthcare" if domain.get("is_healthcare") else "General"
-        lines.append(f"Domain: {dom_label} "
-                     f"(confidence {domain.get('confidence', 0):.0%})")
+        dom_label = domain_info.get("label") or ("Healthcare" if domain.get("is_healthcare") else "General")
+        lines.append(f"Domain: {dom_label} (confidence {domain_info.get('confidence', domain.get('confidence', 0)):.0%})")
     lines += ["", "KEY INSIGHTS", "-" * 40]
     for ins in insights:
         lines.append("• " + ins.replace("**", ""))
+    lines += ["", "SUGGESTIONS", "-" * 40]
+    for suggestion in suggestions:
+        lines.append("• " + suggestion)
+    if story:
+        lines += ["", "DATA STORYTELLING", "-" * 40, story]
     if profile is not None:
         lines += ["", "COLUMN PROFILE", "-" * 40, profile.to_string(index=False)]
     if stats is not None and not stats.empty:
