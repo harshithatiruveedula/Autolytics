@@ -29,13 +29,13 @@ st.markdown("""
 [data-testid="stMainBlockContainer"]{ max-width:100%!important;padding:0!important; }
 [data-testid="stAppViewContainer"] > .main { padding-top:0!important; }
 [data-testid="stVerticalBlock"]     { gap:0.65rem!important; }
-iframe[title="autolytics_workspace"]{ width:100%!important;border:0!important; }
+iframe[title="autolytics_workspace"]{ border:0!important; }
 
 /* ── EDA page ────────────────────────────────────────────────────────────── */
-.kpi-grid  { display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));
-             gap:14px;margin:4px 0 20px; }
-.kpi-card  { background:#fff;border:1px solid #e4ebf6;border-radius:13px;
-             padding:16px 18px;box-shadow:0 4px 16px rgba(25,51,95,.05); }
+.kpi-grid  { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+             gap:13px;margin:4px 0 18px; }
+.kpi-card  { background:#fff;border:1px solid #e1eafb;border-radius:7px;
+             padding:14px 15px;box-shadow:0 2px 8px rgba(25,51,95,.035);min-width:0; }
 .kpi-icon  { font-size:24px;margin-bottom:6px; }
 .kpi-label { font-size:10px;color:#7285a7;font-weight:700;text-transform:uppercase;
              letter-spacing:.04em;margin-bottom:3px; }
@@ -47,15 +47,24 @@ iframe[title="autolytics_workspace"]{ width:100%!important;border:0!important; }
                border:1px solid #dde9ff;border-radius:9px;
                padding:10px 15px;font-size:12px;color:#3558a0;
                line-height:1.6;margin-bottom:7px; }
-.chart-card  { background:#fff;border:1px solid #e4ebf6;border-radius:13px;
-               padding:16px 18px 12px;box-shadow:0 4px 16px rgba(25,51,95,.05);
-               margin-bottom:16px; }
-.chart-title { font-size:13px;font-weight:800;color:#14264a; }
-.chart-desc  { font-size:11px;color:#7285a7;margin-top:2px; }
+.chart-card  { background:#fff;border:1px solid #e1eafb;border-radius:7px;
+               padding:12px 13px 8px;box-shadow:0 2px 8px rgba(25,51,95,.035);
+               margin-bottom:12px;min-width:0;overflow:hidden; }
+.chart-title { font-size:13px;font-weight:800;color:#14264a;line-height:1.35; }
+.chart-desc  { font-size:11px;color:#7285a7;margin-top:3px;line-height:1.4; }
 .chart-cols  { font-size:10px;color:#b0bcd4;margin-top:3px; }
-.empty-charts{ background:#f7f9fd;border:1.5px dashed #c8d8f0;border-radius:12px;
+.empty-charts{ background:#f7f9fd;border:1.5px dashed #c8d8f0;border-radius:8px;
                padding:24px;text-align:center;color:#7285a7;font-size:13px;
-               margin:0 0 20px; }
+               margin:0 0 16px; }
+[data-testid="stVerticalBlockBorderWrapper"]{border-color:#e1eafb!important;
+               border-radius:7px!important;background:#fff!important;
+               box-shadow:0 2px 8px rgba(25,51,95,.035)!important;}
+[data-testid="stVerticalBlockBorderWrapper"] > div{padding:10px 12px 7px!important;}
+[data-testid="stElementContainer"]{min-width:0!important;}
+[data-testid="stAltairChart"]{width:100%!important;min-width:0!important;}
+[data-testid="stAltairChart"] canvas,[data-testid="stAltairChart"] svg{max-width:100%!important;}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:520px){.kpi-grid{grid-template-columns:1fr;}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -678,26 +687,31 @@ def _render_kpi_cards(kpis: list[dict]) -> None:
 
 
 def _render_chart_cards(charts: list[dict]) -> None:
-    """Render stable two-column chart cards using native Streamlit containers."""
-    pairs = [charts[i:i + 2] for i in range(0, len(charts), 2)]
+    """Render charts in stable, design-matched cards without invalid Vega titles."""
     deleted: list[str] = []
 
-    for pair in pairs:
-        col_widgets = st.columns(len(pair), gap="medium")
-        for col_w, item in zip(col_widgets, pair):
+    # The reference design uses a wide + narrow pair first, then compact
+    # three-column rows. This keeps chart cards aligned while making better
+    # use of desktop width. Streamlit naturally stacks columns on narrow screens.
+    groups: list[tuple[list[dict], list[float]]] = []
+    if charts:
+        groups.append((charts[:2], [1.45, 1.0] if len(charts[:2]) == 2 else [1.0]))
+    for idx in range(2, len(charts), 3):
+        groups.append((charts[idx:idx + 3], [1.0] * len(charts[idx:idx + 3])))
+
+    for items, widths in groups:
+        cols = st.columns(widths, gap="medium")
+        for col_w, item in zip(cols, items):
             with col_w:
-                cid = item["id"]
-                title = item.get("title", "Chart")
-                desc = item.get("desc", "")
-                kind = item.get("kind", "")
-                cols_used = item.get("cols_used", [])
+                cid = item.get("id", str(uuid.uuid4()))
+                title = str(item.get("title") or "Chart")
+                desc = str(item.get("desc") or "")
+                kind = str(item.get("kind") or "")
+                cols_used = item.get("cols_used", []) or []
                 cols_lbl = " · ".join(map(str, cols_used)) if cols_used else ""
 
-                # Keep the heading, remove action, and visualization in one
-                # Streamlit-owned bordered container. This avoids closing an
-                # HTML card before the chart is rendered as a separate element.
                 with st.container(border=True):
-                    title_col, action_col = st.columns([9, 1])
+                    title_col, action_col = st.columns([12, 1], vertical_alignment="top")
                     with title_col:
                         st.markdown(
                             f"<div class='chart-title'>{title}</div>"
@@ -706,28 +720,33 @@ def _render_chart_cards(charts: list[dict]) -> None:
                             unsafe_allow_html=True,
                         )
                     with action_col:
-                        if st.button("✕", key=f"del_{cid}", help="Remove chart"):
+                        if st.button("×", key=f"del_{cid}", help="Remove chart"):
                             deleted.append(cid)
 
                     try:
-                        chart = item["chart"].properties(title=None)
+                        chart = item.get("chart")
+                        if chart is None:
+                            st.info("This chart could not be built from the available data.")
+                            continue
+                        # Vega-Lite rejects title=None (JSON null). Use a valid
+                        # empty title string because the card heading is rendered above.
+                        chart = chart.properties(title="")
                         needs_cfg = kind not in ("donut", "corr", "cat_cat")
                         if needs_cfg:
                             chart = (chart
                                 .configure_axis(labelFontSize=10, titleFontSize=11,
-                                                labelColor="#52698e", titleColor="#14264a")
-                                .configure_title(fontSize=13, fontWeight=700,
-                                                 color="#14264a", anchor="start")
+                                                labelColor="#52698e", titleColor="#14264a",
+                                                gridColor="#edf2fa")
                                 .configure_legend(labelFontSize=10, titleFontSize=10))
                         st.altair_chart(chart, use_container_width=True)
                     except Exception as exc:
-                        st.caption(f"Chart unavailable: {exc}")
+                        st.warning(f"Unable to render this chart: {exc}")
 
     if deleted:
         deleted_ids = set(deleted)
         st.session_state.eda_charts = [
             chart for chart in (st.session_state.eda_charts or [])
-            if chart["id"] not in deleted_ids
+            if chart.get("id") not in deleted_ids
         ]
         st.rerun()
 
@@ -756,32 +775,36 @@ def _render_eda_page() -> None:
         return
 
     # ── 1. Header + Generate Charts button ──────────────────────────────────
-    hdr_l, hdr_r = st.columns([3, 1])
+    hdr_l, hdr_r = st.columns([3.2, 2.0], vertical_alignment="center")
     with hdr_l:
         st.markdown(
-            "<h2 style='margin:0 0 3px;color:#0b1c3a;font-size:26px;font-weight:850'>"
+            "<h2 style='margin:0 0 3px;color:#0b1c3a;font-size:24px;font-weight:850'>"
             "📊 EDA &amp; Charts</h2>"
-            "<p style='margin:0;color:#52698e;font-size:13px'>"
-            "Explore your data with automatic analysis, visualizations, and insights. "
-            "Discover patterns, trends, and key findings — all in one place.</p>",
+            "<p style='margin:0;color:#52698e;font-size:12px;line-height:1.5'>"
+            "Explore your data with automatic EDA, visualizations and insights. "
+            "Discover patterns, trends and key findings — all in one place.</p>",
             unsafe_allow_html=True,
         )
     with hdr_r:
-        st.write("")
-        gen_clicked = st.button(
-            "✦ Generate Charts",
-            type="primary",
-            use_container_width=True,
-            key="btn_gen_charts",
-        )
+        ds_col, btn_col = st.columns([1.35, 1], vertical_alignment="bottom")
+        with ds_col:
+            st.markdown(
+                f"<div style='font-size:10px;color:#7285a7;margin:0 0 5px'>Dataset</div>"
+                f"<div style='background:#fff;border:1px solid #dde8f8;border-radius:7px;"
+                f"padding:9px 10px;font-size:11px;color:#243658;overflow:hidden;"
+                f"text-overflow:ellipsis;white-space:nowrap'>▤ {st.session_state.filename or 'dataset'}"
+                f"</div>", unsafe_allow_html=True,
+            )
+        with btn_col:
+            gen_clicked = st.button(
+                "✦ Generate EDA", type="primary", use_container_width=True,
+                key="btn_gen_charts",
+            )
 
-    # ── 2. Dataset info ──────────────────────────────────────────────────────
+    # Small metadata line keeps the design compact without a separate full-width panel.
     st.markdown(
-        f"<div style='background:#fff;border:1px solid #e4ebf6;border-radius:9px;"
-        f"padding:8px 14px;font-size:12px;color:#3558a0;margin:10px 0 14px;"
-        f"display:inline-flex;align-items:center;gap:8px'>"
-        f"🗂 <b>{st.session_state.filename or 'dataset'}</b> — "
-        f"{len(df):,} rows × {len(df.columns)} columns</div>",
+        f"<div style='font-size:10px;color:#8295b5;margin:3px 0 10px'>"
+        f"{len(df):,} rows · {len(df.columns)} columns</div>",
         unsafe_allow_html=True,
     )
 
@@ -991,11 +1014,18 @@ def main():
     if nav == "eda":
         st.markdown(
             "<style>"
-            "iframe[title='autolytics_workspace']"
-            "{display:none!important;height:0!important;}"
-            "[data-testid='stCustomComponentV1']"
-            "{height:0!important;min-height:0!important;"
-            "padding:0!important;margin:0!important;overflow:hidden!important;}"
+            "iframe[title='autolytics_workspace']{position:fixed!important;"
+            "left:0!important;top:0!important;width:188px!important;height:100vh!important;"
+            "z-index:1000!important;display:block!important;border:0!important;}"
+            "[data-testid='stCustomComponentV1']{height:0!important;min-height:0!important;"
+            "padding:0!important;margin:0!important;overflow:visible!important;}"
+            "[data-testid='stMainBlockContainer']{margin-left:188px!important;"
+            "width:calc(100% - 188px)!important;max-width:none!important;"
+            "padding:14px 14px 18px!important;box-sizing:border-box!important;}"
+            ".chart-title{font-size:13px!important;}"
+            "@media(max-width:700px){iframe[title='autolytics_workspace']{width:64px!important;}"
+            "[data-testid='stMainBlockContainer']{margin-left:64px!important;"
+            "width:calc(100% - 64px)!important;padding:8px!important;}}"
             "</style>",
             unsafe_allow_html=True,
         )
