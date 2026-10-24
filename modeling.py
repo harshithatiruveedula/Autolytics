@@ -73,6 +73,53 @@ def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000)
         if work[c].nunique(dropna=True) <= 1: continue
         features.append(c)
     if not features: raise ValueError('No suitable predictor columns were found after excluding identifiers and unusable fields.')
+
+    # Keep the prediction form practical: rank candidate inputs by their measured
+    # association with the target and train on a compact, relevant feature set.
+    # This prevents forms from asking for every raw column (names, hospital IDs,
+    # administrative fields, etc.) when a smaller set carries most of the signal.
+    try:
+        from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+        score_df = work[features].copy()
+        score_y = y.copy()
+        if len(score_df) > 5000:
+            if task == 'classification':
+                try:
+                    sample_idx, _ = train_test_split(score_df.index, train_size=5000, random_state=42, stratify=score_y)
+                except ValueError:
+                    sample_idx = score_df.sample(n=5000, random_state=42).index
+            else:
+                sample_idx = score_df.sample(n=5000, random_state=42).index
+            score_df = score_df.loc[sample_idx]
+            score_y = score_y.loc[sample_idx]
+        encoded = pd.DataFrame(index=score_df.index)
+        for col in features:
+            values = score_df[col]
+            if pd.api.types.is_numeric_dtype(values):
+                numeric_values = pd.to_numeric(values, errors='coerce')
+                fill = numeric_values.median()
+                encoded[col] = numeric_values.fillna(0 if pd.isna(fill) else fill)
+            else:
+                text_values = values.astype('string').fillna('__MISSING__')
+                # Avoid free-text/name fields with near-unique values.
+                if text_values.nunique() > min(100, max(30, int(.2 * len(text_values)))):
+                    encoded[col] = 0
+                else:
+                    encoded[col] = pd.factorize(text_values, sort=True)[0]
+        y_encoded = pd.factorize(score_y.astype('string'), sort=True)[0] if task == 'classification' else pd.to_numeric(score_y, errors='coerce').fillna(pd.to_numeric(score_y, errors='coerce').median()).to_numpy()
+        if task == 'classification':
+            relevance = mutual_info_classif(encoded.to_numpy(), y_encoded, random_state=42)
+        else:
+            relevance = mutual_info_regression(encoded.to_numpy(), y_encoded, random_state=42)
+        ranked = sorted(zip(features, relevance), key=lambda item: float(item[1]), reverse=True)
+        relevant = [col for col, score in ranked if np.isfinite(score)]
+        if relevant:
+            features = relevant[:min(8, len(relevant))]
+    except Exception:
+        # Fall back to the safe candidate list if relevance ranking is unsupported
+        # for a particular dataset; model training should remain usable.
+        features = features[:8]
+
     # Bound runtime on large uploads: model selection uses a reproducible representative
     # sample, while the final selected pipeline is fitted on a larger bounded sample.
     # This prevents multi-minute browser waits on 50k+ row datasets.
