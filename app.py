@@ -781,7 +781,7 @@ def _render_chart_cards(charts: list[dict]) -> None:
                                 .configure_legend(labelFontSize=10, titleFontSize=10,
                                                   symbolSize=95, padding=8)
                                 .configure_view(strokeOpacity=0))
-                        st.altair_chart(chart, use_container_width=True)
+                        st.altair_chart(chart, width="stretch")
                     except Exception as exc:
                         st.warning(f"Unable to render this chart: {exc}")
     if deleted:
@@ -832,7 +832,7 @@ def _render_eda_page() -> None:
             )
         with btn_col:
             gen_clicked = st.button(
-                "✦ Generate EDA", type="primary", use_container_width=True,
+                "✦ Generate EDA", type="primary", width="stretch",
                 key="btn_gen_charts",
             )
 
@@ -926,19 +926,19 @@ def _render_eda_page() -> None:
     with tab_profile:
         p = st.session_state.eda_profile
         if p is not None:
-            st.dataframe(p, use_container_width=True, hide_index=True)
+            st.dataframe(p, width="stretch", hide_index=True)
     with tab_stats:
         s = st.session_state.eda_stats
         if s is None or s.empty:
             st.info("No numeric columns for descriptive statistics.")
         else:
-            st.dataframe(s, use_container_width=True, hide_index=True)
+            st.dataframe(s, width="stretch", hide_index=True)
     with tab_missing:
         m = st.session_state.eda_missing
         if m is None or m.empty:
             st.success("No missing values in this dataset.", icon="✅")
         else:
-            st.dataframe(m, use_container_width=True, hide_index=True)
+            st.dataframe(m, width="stretch", hide_index=True)
     with tab_outliers:
         o = st.session_state.eda_outliers
         if o is None or o.empty:
@@ -948,13 +948,13 @@ def _render_eda_page() -> None:
             if od.empty:
                 st.success("No outliers detected (IQR method).", icon="✅")
             else:
-                st.dataframe(od, use_container_width=True, hide_index=True)
+                st.dataframe(od, width="stretch", hide_index=True)
     with tab_corr:
         c_df = st.session_state.eda_corr_df
         if c_df is None or c_df.empty:
             st.info("At least 2 numeric columns needed for correlation analysis.")
         else:
-            st.dataframe(c_df.round(3), use_container_width=True)
+            st.dataframe(c_df.round(3), width="stretch")
 
 
 
@@ -1162,7 +1162,7 @@ def _render_modeling_page() -> None:
     with action:
         st.write("")
         st.write("")
-        train_clicked = st.button("▶  Train Model", type="primary", use_container_width=True, key="model_train_button")
+        train_clicked = st.button("▶  Train Model", type="primary", width="stretch", key="model_train_button")
     current_model = st.session_state.get("model_info")
     if current_model and current_model.get("target") != target:
         st.session_state.model_info = None
@@ -1194,7 +1194,7 @@ def _render_modeling_page() -> None:
         with st.expander("Model comparison details"):
             results = pd.DataFrame(current_model['results'])
             if 'score' in results: results['score'] = results['score'].map(lambda x: round(x, 4) if pd.notna(x) else x)
-            st.dataframe(results, use_container_width=True, hide_index=True)
+            st.dataframe(results, width="stretch", hide_index=True)
     else:
         st.info("Training has not started. Select a target variable and click Train Model.")
     st.divider()
@@ -1227,7 +1227,7 @@ def _render_modeling_page() -> None:
                             raw_values[col] = st.selectbox(str(col), vals, key=f"model_input_{col}")
                         else:
                             raw_values[col] = st.text_input(str(col), value=str(nonnull.mode().iloc[0]) if not nonnull.empty else "", key=f"model_input_{col}")
-            predict_clicked = st.form_submit_button("✦  Predict", type="primary", use_container_width=True)
+            predict_clicked = st.form_submit_button("✦  Predict", type="primary", width="stretch")
     with form_right:
         st.markdown("**Prediction Result**")
         result = st.session_state.get("model_prediction")
@@ -1335,7 +1335,7 @@ def main():
                 st.dataframe(
                     pd.DataFrame([{"Column": col, **info}
                                   for col, info in details.items()]),
-                    use_container_width=True, hide_index=True,
+                    width="stretch", hide_index=True,
                 )
 
 
