@@ -8,18 +8,6 @@ import pandas as pd
 ID_WORDS = re.compile(r'(^|[_\s-])(id|uuid|guid|index|serial|record|patient id|student id|customer id|order id|transaction id|invoice id)([_\s-]|$)', re.I)
 LEAK_WORDS = re.compile(r'(target|label|outcome|result|prediction|discharge status|final grade|final score|actual .*|post.?event|after .*|recovery status)', re.I)
 NON_FEATURE_WORDS = re.compile(r'(name|email|phone|mobile|address|postcode|zip.?code|notes?|comments?|description|free.?text|url|website|password|token)', re.I)
-# Personal/demographic columns are not useful prediction targets or user-entered
-# prediction inputs in this generic modelling workflow.
-PERSONAL_FIELD_WORDS = re.compile(
-    r'(^|[_\\s-])(age|gender|sex|dob|date of birth|birth date|birthdate|'
-    r'first name|last name|full name|patient name|student name|customer name|'
-    r'employee name|doctor name)([_\\s-]|$)', re.I
-)
-
-def _is_personal_field(name: str) -> bool:
-    normalized = re.sub(r'[_\\-]+', ' ', str(name).strip())
-    return bool(PERSONAL_FIELD_WORDS.search(normalized))
-
 
 def get_target_candidates(df: pd.DataFrame) -> list[str]:
     """Return plausible outcome columns, excluding IDs, constants, dates and free text."""
@@ -35,7 +23,7 @@ def get_target_candidates(df: pd.DataFrame) -> list[str]:
             continue
         if not pd.api.types.is_numeric_dtype(series) and _is_identifier(series, str(col)):
             continue
-        if NON_FEATURE_WORDS.search(str(col)) or _is_personal_field(str(col)):
+        if NON_FEATURE_WORDS.search(str(col)):
             continue
         if pd.api.types.is_datetime64_any_dtype(series) or re.search(r'(^|[_\s-])(date|datetime|timestamp)([_\s-]|$)', str(col), re.I):
             continue
@@ -123,7 +111,7 @@ def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000)
     # uses column metadata only (not target values), so it does not leak test labels.
     useful_features = []
     for col in features:
-        if NON_FEATURE_WORDS.search(str(col)) or _is_personal_field(str(col)):
+        if NON_FEATURE_WORDS.search(str(col)):
             continue
         if LEAK_WORDS.search(str(col)):
             continue
@@ -175,6 +163,18 @@ def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000)
         scoring=lambda yt,yp: r2_score(yt,yp) if len(yt)>1 else -1
         metric='R²'
     results=[]; fitted=[]
+    # A simple mean-prediction baseline is essential for interpreting regression
+    # metrics: a complex model should be judged against this held-out baseline.
+    baseline_metrics = None
+    if task == 'regression':
+        baseline_value = float(pd.to_numeric(y_train, errors='coerce').mean())
+        baseline_pred = np.full(len(y_test), baseline_value, dtype=float)
+        baseline_metrics = {
+            'mae': float(mean_absolute_error(y_test, baseline_pred)),
+            'rmse': float(np.sqrt(mean_squared_error(y_test, baseline_pred))),
+            'r2': float(r2_score(y_test, baseline_pred)) if len(y_test) > 1 else float('nan'),
+            'prediction': baseline_value,
+        }
     for name, estimator in models:
         pipe=Pipeline([('preprocess',pre),('model',estimator)])
         try:
@@ -205,7 +205,13 @@ def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000)
     final=best[2]
     with warnings.catch_warnings():
         warnings.simplefilter('ignore'); final.fit(X,y)
-    extra={'task':task,'target':target,'features':features,'model_name':best[1],'metric':metric,'best_score':best[0], 'results':results,'pipeline':final,'feature_columns':X.columns.tolist(),'feature_template':X.iloc[[0]].copy(),'train_rows':len(X_train),'test_rows':len(X_test),'classes':list(final.named_steps['model'].classes_) if task=='classification' and hasattr(final.named_steps['model'],'classes_') else None}
+    best_result = next((r for r in results if r.get('name') == best[1]), {})
+    predictive_status = 'not_assessed'
+    if task == 'regression':
+        # Negative R² means the selected model failed to beat the mean baseline
+        # on this split; don't present its output as a dependable prediction.
+        predictive_status = 'weak' if best_result.get('r2', -1) < 0 else ('moderate' if best_result.get('r2', 0) < .5 else 'stronger')
+    extra={'task':task,'target':target,'features':features,'model_name':best[1],'metric':metric,'best_score':best[0], 'results':results,'pipeline':final,'feature_columns':X.columns.tolist(),'feature_template':X.iloc[[0]].copy(),'train_rows':len(X_train),'test_rows':len(X_test),'baseline_metrics':baseline_metrics,'predictive_status':predictive_status,'classes':list(final.named_steps['model'].classes_) if task=='classification' and hasattr(final.named_steps['model'],'classes_') else None}
     return extra
 
 def prepare_prediction(raw: dict, model_info: dict) -> pd.DataFrame:

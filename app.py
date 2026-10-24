@@ -1265,8 +1265,15 @@ def _render_modeling_page() -> None:
             m1.metric("MAE", f"{best_row.get('mae', float('nan')):.2f}" if pd.notna(best_row.get('mae', float('nan'))) else "N/A")
             m2.metric("RMSE", f"{best_row.get('rmse', float('nan')):.2f}" if pd.notna(best_row.get('rmse', float('nan'))) else "N/A")
             m3.metric("R²", f"{best_row.get('r2', float('nan')):.3f}" if pd.notna(best_row.get('r2', float('nan'))) else "N/A")
+            baseline = current_model.get('baseline_metrics') or {}
+            if baseline:
+                st.caption(f"Mean-baseline comparison · MAE: {baseline.get('mae', float('nan')):.2f} · RMSE: {baseline.get('rmse', float('nan')):.2f} · R²: {baseline.get('r2', float('nan')):.3f}")
             if best_row.get('r2', 0) < 0:
-                st.warning("All predictions may be unreliable: the selected model has a negative R² on held-out test data. Try another target or inspect the dataset and its features.")
+                st.warning("Low predictive performance: this model did not outperform the mean-prediction baseline on the held-out test set. Treat individual predictions as experimental, inspect feature relevance and data quality, or try a different target.")
+            elif best_row.get('r2', 0) < 0.5:
+                st.info("The model shows limited explanatory power on held-out data. Predictions may be useful for exploration, but should not be treated as highly reliable.")
+            else:
+                st.success("The model explains a meaningful share of target variation on this held-out test split. Validate on additional data before real-world use.")
         else:
             st.markdown("**Model evaluation metrics · held-out test data**")
             best_row = next((r for r in current_model['results'] if r.get('name') == current_model['model_name']), {})
@@ -1332,7 +1339,10 @@ def _render_modeling_page() -> None:
                 st.markdown("**Class probabilities**")
                 for cls, prob in result['probabilities']:
                     st.write(f"{cls}: {prob:.1%}")
-            st.caption("Classification probabilities are model estimates, not guarantees of real-world certainty.")
+            if info['task'] == 'classification' and result.get('probabilities'):
+                st.caption("Class probabilities are model estimates, not guarantees of real-world certainty.")
+            elif info['task'] == 'regression':
+                st.caption("This is a model estimate, not a guaranteed outcome. Check the held-out evaluation metrics before relying on it.")
     if predict_clicked:
         try:
             from modeling import prepare_prediction
