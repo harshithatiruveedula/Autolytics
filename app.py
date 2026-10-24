@@ -1211,10 +1211,17 @@ def _render_modeling_page() -> None:
     else:
         domain_label = st.session_state.get("domain_cache_value", "General")
     st.markdown(f"<div class='model-dataset'><div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center'><div><b>▤ &nbsp;{html.escape(str(st.session_state.get('filename') or 'Uploaded dataset'))}</b> &nbsp; <span style='background:#dcf8ef;color:#07855f;padding:4px 9px;border-radius:20px;font-size:11px;font-weight:700'>✓ Cleaned</span><div class='model-muted' style='margin-top:7px'>{len(df):,} rows &nbsp; · &nbsp; {len(df.columns)} columns &nbsp; · &nbsp; {html.escape(str(domain_label))}</div></div><div style='background:#eef6ff;border-radius:8px;padding:10px 18px;color:#1256ad'><b>Detected Domain</b><br>{html.escape(str(domain_label))}</div></div></div>", unsafe_allow_html=True)
-    st.markdown("<div class='model-step'>1. Select Target Variable</div><p class='model-muted'>Choose the column you want to predict. The application will automatically detect the model type and configure the best model.</p>", unsafe_allow_html=True)
+    from modeling import get_target_candidates
+    target_options = get_target_candidates(df)
+    st.markdown("<div class='model-step'>1. Select Target Variable</div><p class='model-muted'>Choose a meaningful outcome to predict. Identifier, constant, date-only and free-text columns are filtered out automatically.</p>", unsafe_allow_html=True)
+    if not target_options:
+        st.warning("No suitable prediction target was detected. Check that your dataset contains a meaningful outcome column with enough valid values, such as a score, amount, status or category.")
+        return
     left, right, action = st.columns([1.35, 1, .58], gap="medium")
     with left:
-        target = st.selectbox("Target Variable", options=list(map(str, df.columns)), key="model_target_selector", help="Choose the outcome you want the model to learn.")
+        previous_target = st.session_state.get("model_target_selector")
+        target_index = target_options.index(previous_target) if previous_target in target_options else 0
+        target = st.selectbox("Target Variable", options=target_options, index=target_index, key="model_target_selector", help="Choose the outcome you want the model to learn.")
     with right:
         st.markdown("<div class='model-config'><b>✦ &nbsp;Auto Configuration</b><br>✓ &nbsp; Detects classification / regression<br>✓ &nbsp; Selects suitable algorithms<br>✓ &nbsp; Handles missing values and encodes categories<br>✓ &nbsp; Scales numerical features when needed<br>✓ &nbsp; Chooses task-appropriate metrics</div>", unsafe_allow_html=True)
     with action:
@@ -1249,10 +1256,36 @@ def _render_modeling_page() -> None:
             st.error(str(exc))
     if current_model:
         st.markdown(f"<div class='model-result'><b>✓ Model ready</b><br><span class='model-muted'>Task: {html.escape(current_model['task'].title())} · Best model: {html.escape(current_model['model_name'])} · Train rows: {current_model['train_rows']:,} · Test rows: {current_model['test_rows']:,}</span></div>", unsafe_allow_html=True)
-        with st.expander("Model comparison details"):
+        task = current_model['task']
+        if task == 'regression':
+            st.markdown("**Model evaluation metrics · held-out test data**")
+            m1, m2, m3 = st.columns(3)
+            best_row = next((r for r in current_model['results'] if r.get('name') == current_model['model_name']), {})
+            m1.metric("MAE", f"{best_row.get('mae', float('nan')):.2f}" if pd.notna(best_row.get('mae', float('nan'))) else "N/A")
+            m2.metric("RMSE", f"{best_row.get('rmse', float('nan')):.2f}" if pd.notna(best_row.get('rmse', float('nan'))) else "N/A")
+            m3.metric("R²", f"{best_row.get('r2', float('nan')):.3f}" if pd.notna(best_row.get('r2', float('nan'))) else "N/A")
+            if best_row.get('r2', 0) < 0:
+                st.warning("All predictions may be unreliable: the selected model has a negative R² on held-out test data. Try another target or inspect the dataset and its features.")
+        else:
+            st.markdown("**Model evaluation metrics · held-out test data**")
+            best_row = next((r for r in current_model['results'] if r.get('name') == current_model['model_name']), {})
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Accuracy", f"{best_row.get('accuracy', float('nan')):.3f}")
+            m2.metric("Precision", f"{best_row.get('precision', float('nan')):.3f}")
+            m3.metric("Recall", f"{best_row.get('recall', float('nan')):.3f}")
+            m4.metric("F1-score", f"{best_row.get('f1_score', float('nan')):.3f}")
+        with st.expander("Model comparison details", expanded=True):
             results = pd.DataFrame(current_model['results'])
-            if 'score' in results: results['score'] = results['score'].map(lambda x: round(x, 4) if pd.notna(x) else x)
+            if task == 'regression':
+                show_cols = [c for c in ['name', 'mae', 'rmse', 'r2'] if c in results.columns]
+                results = results[show_cols].rename(columns={'name':'Model', 'mae':'MAE ↓', 'rmse':'RMSE ↓', 'r2':'R² ↑'})
+            else:
+                show_cols = [c for c in ['name', 'accuracy', 'precision', 'recall', 'f1_score'] if c in results.columns]
+                results = results[show_cols].rename(columns={'name':'Model', 'accuracy':'Accuracy ↑', 'precision':'Precision ↑', 'recall':'Recall ↑', 'f1_score':'F1-score ↑'})
+            numeric_cols = results.select_dtypes(include=[np.number]).columns
+            results[numeric_cols] = results[numeric_cols].round(4)
             st.dataframe(results, width="stretch", hide_index=True)
+            st.caption("Metrics are calculated on the held-out test split. Higher is better for R², accuracy, precision, recall and F1; lower is better for MAE and RMSE.")
     else:
         st.info("Training has not started. Select a target variable and click Train Model.")
     st.divider()
@@ -1292,7 +1325,8 @@ def _render_modeling_page() -> None:
         if result is None:
             st.markdown("<div class='model-result'><span class='model-muted'>Your prediction will appear here after you enter the feature values and click Predict.</span></div>", unsafe_allow_html=True)
         else:
-            st.markdown(f"<div class='model-result'><div class='model-muted'>Predicted {html.escape(info['target'])}</div><div class='model-result-value'>{html.escape(str(result['prediction']))}</div></div>", unsafe_allow_html=True)
+            display_prediction = f"{float(result['prediction']):.2f}" if info['task'] == 'regression' else str(result['prediction'])
+            st.markdown(f"<div class='model-result'><div class='model-muted'>Predicted {html.escape(info['target'])}</div><div class='model-result-value'>{html.escape(display_prediction)}</div></div>", unsafe_allow_html=True)
             if result.get('probabilities'):
                 st.markdown("**Class probabilities**")
                 for cls, prob in result['probabilities']:
