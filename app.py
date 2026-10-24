@@ -1,6 +1,12 @@
 from __future__ import annotations
-from dotenv import load_dotenv
-load_dotenv()
+
+# dotenv is optional on Streamlit Cloud; environment variables can also be
+# configured directly in the deployment's Secrets/settings.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import base64
 import gzip
