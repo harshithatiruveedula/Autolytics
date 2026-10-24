@@ -149,7 +149,11 @@ def _looks_date(s: pd.Series) -> bool:
 
 
 def detect_domain_and_roles(df: pd.DataFrame) -> dict[str, Any]:
-    """Detect a domain and map semantic roles, allowing aliases and value cues."""
+    """Detect a domain and map semantic roles, allowing aliases and value cues.
+
+    This function is intentionally pure (no Streamlit calls) so it can be
+    wrapped with st.cache_data in app.py.
+    """
     all_maps: dict[str, dict[str, str]] = {}
     scores: dict[str, float] = {}
     for domain, role_aliases in ALIASES.items():

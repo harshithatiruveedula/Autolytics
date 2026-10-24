@@ -21,7 +21,38 @@ import streamlit.components.v1 as components
 
 from cleaning import clean_dataset, format_cleaning_summary
 from query import TABLE_NAME, run_user_query
-from domain import detect_domain
+
+
+# ---------------------------------------------------------------------------
+# Cached wrappers for expensive pure-function computations
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_detect_domain_and_roles(df: pd.DataFrame) -> dict:
+    """Cache domain detection — runs once per distinct dataset content."""
+    from domain_analytics import detect_domain_and_roles
+    return detect_domain_and_roles(df)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_detect_domain(df: pd.DataFrame) -> dict:
+    """Cache legacy healthcare domain detection."""
+    from domain import detect_domain
+    return detect_domain(df)
+
+
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_generate_narrative(df: pd.DataFrame, _domain_name: str) -> dict:
+    """Cache narrative generation — pure function of df content.
+
+    `_domain_name` is used only as an extra cache-key discriminator so that
+    switching datasets with the same shape but different domains invalidates
+    correctly.  The actual domain_info is recomputed inside (from the already-
+    cached detect_domain_and_roles) so mappings are always current.
+    """
+    from domain_analytics import generate_narrative, detect_domain_and_roles
+    domain_info = detect_domain_and_roles(df)
+    return generate_narrative(df, domain_info)
 
 st.set_page_config(
     page_title="AUTOLYTICS | Data Analytics",
@@ -284,11 +315,29 @@ def process_event(event) -> bool:
 # EDA base stats (computed once per dataset, cached in session state)
 # ---------------------------------------------------------------------------
 
+def _df_fingerprint(df: pd.DataFrame) -> tuple:
+    """Stable, cheap fingerprint for a DataFrame — used as a cache key.
+
+    Avoids re-computing expensive EDA when the same dataset is still loaded.
+    Uses shape + column names + a hash of a small sample of values so it is
+    cheap to compute but changes when the data changes.
+    """
+    try:
+        # pandas.util.hash_pandas_object is fast and deterministic.
+        import pandas.util
+        row_hash = int(pd.util.hash_pandas_object(df.iloc[::max(1, len(df)//500)]).sum())
+    except Exception:
+        row_hash = hash(df.to_csv(index=False)[:2000])
+    return (df.shape, tuple(str(c) for c in df.columns), row_hash)
+
+
 def _ensure_base_eda(df: pd.DataFrame) -> None:
     from eda import (classify_columns, compute_kpis, generate_insights,
                      profile_columns, descriptive_stats, outlier_summary)
-    current_id = id(df)
-    if st.session_state.eda_dataset_id == current_id and st.session_state.eda_kpis is not None:
+    # Use a content fingerprint so the cache survives Streamlit reruns even
+    # when the DataFrame object id() changes (e.g. after session state reload).
+    current_key = _df_fingerprint(df)
+    if st.session_state.eda_dataset_id == current_key and st.session_state.eda_kpis is not None:
         return
     cols    = classify_columns(df)
     profile = profile_columns(df)
@@ -311,7 +360,7 @@ def _ensure_base_eda(df: pd.DataFrame) -> None:
     st.session_state.eda_outliers   = outliers
     st.session_state.eda_missing    = missing_df
     st.session_state.eda_corr_df    = corr_df
-    st.session_state.eda_dataset_id = current_id
+    st.session_state.eda_dataset_id = current_key
 
 
 # ---------------------------------------------------------------------------
@@ -608,29 +657,35 @@ def _make_chart(df: pd.DataFrame, spec: dict) -> dict | None:
 
 def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
     """Generate domain-specific charts and evidence-backed narrative outputs."""
-    from domain import detect_domain as detect_healthcare, plan_hospital_charts
-    from domain_analytics import detect_domain_and_roles, build_domain_charts, generate_narrative
+    from domain_analytics import build_domain_charts
+    from domain import plan_hospital_charts
 
-    domain_info = detect_domain_and_roles(df)
-    narrative = generate_narrative(df, domain_info)
+    # Use cached domain detection — avoids rescanning all columns on every rerun.
+    domain_info = _cached_detect_domain_and_roles(df)
+    # narrative is also cached: keyed on df content + domain name
+    narrative = _cached_generate_narrative(df, domain_info.get("name", "generic"))
     st.session_state.eda_domain_info = domain_info
     st.session_state.eda_insights = narrative.get("insights", [])
     st.session_state.eda_suggestions = narrative.get("suggestions", [])
     st.session_state.eda_story = narrative.get("story", "")
-    # Existing app banner and report code expect the legacy healthcare flag.
-    legacy_domain = detect_healthcare(df)
+    # Legacy healthcare flag used by the app banner and report code.
+    legacy_domain = _cached_detect_domain(df)
     legacy_domain["domain_name"] = domain_info.get("name", "generic")
     legacy_domain["domain_label"] = domain_info.get("label", "General")
-    legacy_domain["is_healthcare"] = domain_info.get("name") == "healthcare" or legacy_domain.get("is_healthcare", False)
-    legacy_domain["confidence"] = max(float(legacy_domain.get("confidence", 0)), float(domain_info.get("confidence", 0)))
+    legacy_domain["is_healthcare"] = (
+        domain_info.get("name") == "healthcare"
+        or legacy_domain.get("is_healthcare", False)
+    )
+    legacy_domain["confidence"] = max(
+        float(legacy_domain.get("confidence", 0)),
+        float(domain_info.get("confidence", 0)),
+    )
     st.session_state.eda_domain = legacy_domain
 
-    # Build charts from semantic roles first. These are single-metric charts;
-    # category breakdowns are used only when they are meaningful for the domain.
+    # Build charts from semantic roles first.
     charts = build_domain_charts(df, domain_info, max_charts=20)
 
-    # Retain the mature healthcare planner for additional operational plots,
-    # without allowing it to replace the new charts or duplicate chart titles.
+    # Supplement with mature healthcare planner for additional operational plots.
     if domain_info.get("name") == "healthcare":
         try:
             mappings = legacy_domain.get("mappings", {})
@@ -646,11 +701,8 @@ def _generate_auto_charts(df: pd.DataFrame) -> list[dict]:
                     charts.append(item)
                     known_titles.add(item.get("title"))
         except Exception:
-            # A missing optional healthcare metric must not block other charts.
             pass
 
-    # If chart libraries are unavailable or the schema is unusually sparse,
-    # let the caller display the narrative and generic profile without crashing.
     return charts[:20]
 
 
@@ -847,7 +899,8 @@ def _render_eda_page() -> None:
     if gen_clicked:
         with st.spinner("Detecting domain and building charts…"):
             try:
-                # EDA profiling is deferred until the user explicitly requests analysis.
+                # EDA profiling and chart generation only run when the user
+                # explicitly requests them.  This keeps the page load instant.
                 _ensure_base_eda(df)
                 charts = _generate_auto_charts(df)
                 st.session_state.eda_charts = charts
@@ -916,6 +969,11 @@ def _render_eda_page() -> None:
             st.markdown(f"<div class='insight-bar'>→ {safe_suggestion}</div>", unsafe_allow_html=True)
 
     # ── 8. Data overview tabs ─────────────────────────────────────────────────
+    # These tabs read from session state; they only show content after Generate
+    # Charts has been clicked (which populates the EDA stats).
+    if st.session_state.eda_kpis is None:
+        st.info("Click **Generate Charts** above to populate the data overview.", icon="ℹ️")
+        return
     st.markdown(
         "<div class='sec-head' style='margin-top:24px'>🔍 Data Overview</div>",
         unsafe_allow_html=True,
@@ -1140,11 +1198,11 @@ def _render_modeling_page() -> None:
         st.session_state.model_info = None
         st.session_state.model_prediction = None
         st.session_state.model_dataset_id = dataset_id
-    # Domain detection is cached per uploaded dataset; ordinary widget reruns reuse it.
-    domain_key = (st.session_state.get("filename"), len(df), len(df.columns), tuple(map(str, df.columns)))
+    # Domain detection is cached per uploaded dataset content; ordinary widget reruns reuse it.
+    domain_key = _df_fingerprint(df)
     if st.session_state.get("domain_cache_key") != domain_key:
         try:
-            domain_info = detect_domain(df)
+            domain_info = _cached_detect_domain(df)
             domain_label = domain_info.get("label", "General") if isinstance(domain_info, dict) else str(domain_info)
         except Exception:
             domain_label = "General"
