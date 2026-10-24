@@ -316,21 +316,33 @@ function render(){
     window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
     return;
   }
-  if(nav==='modeling'||nav==='reports'){
-    const name=nav==='modeling'?'Modeling':'Reports';
-    root.innerHTML=`<div class="layout">${sidebar()}<main class="main"><div class="pageplaceholder"><div class="eyebrow">AUTOLYTICS WORKSPACE</div><h2>${name}</h2><p>This module will be connected to your dataset in the next implementation step.</p></div></main></div>`;
-    bindCommon();height();return;
+  if(nav==='modeling'){
+    // Modeling page: Python renders all content; iframe is sidebar-only via fixed CSS.
+    root.innerHTML=`<div class="layout">${sidebar()}<main class="main"></main></div>`;
+    bindCommon();
+    window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
+    return;
+  }
+  if(nav==='reports'){
+    root.innerHTML=`<div class="layout">${sidebar()}<main class="main"></main></div>`;
+    bindCommon();
+    window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
+    return;
   }
   // home / upload / query all render the same full home page
   root.innerHTML=renderHome();
   bindCommon();
   bindHome();
-  height();
+  // Report height after DOM paint so scrollHeight is accurate
+  requestAnimationFrame(()=>{
+    height();
+    // Re-report after images/fonts settle
+    setTimeout(height,400);
+  });
 
   // After render, scroll + highlight if nav is upload or query
   if(nav==='upload'||nav==='query'){
     const sectionId=nav==='upload'?'uploadSection':'querySection';
-    // Use rAF + timeouts to fire after the DOM has painted
     requestAnimationFrame(()=>scrollToSection(sectionId));
     setTimeout(()=>scrollToSection(sectionId),200);
   }
@@ -440,11 +452,16 @@ window.addEventListener('message',e=>{
   if(args.eda_has_result||args.eda_error)state.busyEda=false;
   render();
   // Re-apply scroll/highlight after a Streamlit rerun restores the same nav
-  const nav=args.nav||'home';  if(nav==='upload'||nav==='query'){
+  const nav=args.nav||'home';
+  if(nav==='upload'||nav==='query'){
     const sectionId=nav==='upload'?'uploadSection':'querySection';
     requestAnimationFrame(()=>scrollToSection(sectionId));
     setTimeout(()=>scrollToSection(sectionId),200);
   }
 });
+// Send ready and an initial height so Streamlit pre-allocates space before
+// the first streamlit:render message arrives. Without this the component
+// wrapper collapses to 0 and the content never paints on Cloud.
 ready();
+window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:window.screen.height||900},'*');
 </script></body></html>

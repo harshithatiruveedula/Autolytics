@@ -1322,47 +1322,34 @@ def main():
     init_state()
     nav = st.session_state.nav
 
-    # ── EDA page ──────────────────────────────────────────────────────────────
-    # The EDA page is 100 % Streamlit-native.  We still instantiate the
-    # component so nav-click events (switching to another page) are processed,
-    # but we must prevent it from taking up vertical space.
-    # Two-pronged fix:
-    #   1. CSS: display:none removes the iframe from layout flow entirely.
-    #   2. index.html reports height:1 (not scrollHeight) for the EDA page,
-    #      so Streamlit never allocates space for the component wrapper.
-    if nav == "modeling":
-        st.markdown(
-            "<style>iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{position:fixed!important;left:0!important;top:0!important;width:248px!important;height:100vh!important;min-height:100vh!important;max-height:none!important;z-index:1000!important;display:block!important;border:0!important;}[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;overflow:visible!important;}[data-testid='stMainBlockContainer']{position:relative!important;margin-left:248px!important;width:calc(100% - 248px)!important;max-width:none!important;padding:14px 24px 24px!important;box-sizing:border-box!important}@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;margin-left:248px!important;width:calc(100% - 248px)!important}}</style>",
-            unsafe_allow_html=True,
-        )
-        event = _workspace(**build_component_data(), key="autolytics_custom_workspace", default=None)
-        if event and process_event(event):
-            st.rerun()
-        _render_modeling_page()
-        return
+    # ── Shared CSS injected once per page load ─────────────────────────────────
+    # For home/upload/query: the iframe IS the full page layout (sidebar + content).
+    # For eda/modeling: the iframe is sidebar-only, fixed to the left edge;
+    #   Python renders the main content in the Streamlit block below.
+    sidebar_w = "64px" if st.session_state.get("sidebar_collapsed", False) else "248px"
 
-    if nav == "eda":
+    if nav in ("eda", "modeling", "reports"):
+        # Sidebar-only mode: pin the iframe to the left as a fixed sidebar,
+        # shift the Streamlit content block to the right.
         st.markdown(
-            "<style>"
-            "iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{"
-            "position:fixed!important;left:0!important;top:0!important;width:"
-            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
-            + "!important;height:100vh!important;min-height:100vh!important;"
-            "z-index:1000!important;display:block!important;border:0!important;}"
-            "[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;"
-            "width:0!important;height:0!important;min-width:0!important;min-height:0!important;"
-            "padding:0!important;margin:0!important;overflow:visible!important;}"
-            "[data-testid='stMainBlockContainer']{position:relative!important;margin-left:"
-            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
-            + "!important;width:calc(100% - "
-            + ("64px" if st.session_state.get("sidebar_collapsed", False) else "188px")
-            + ")!important;max-width:none!important;padding:14px 18px 18px!important;"
-            "box-sizing:border-box!important;}"
-            ".chart-title{font-size:13px!important;}"
-            "@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;}}"
-            "@media(max-width:520px){[data-testid='stMainBlockContainer']{margin-left:64px!important;"
-            "width:calc(100% - 64px)!important;}}"
-            "</style>",
+            f"<style>"
+            f"iframe[title*='autolytics_workspace'],"
+            f"[data-testid='stCustomComponentV1'] iframe{{"
+            f"position:fixed!important;left:0!important;top:0!important;"
+            f"width:{sidebar_w}!important;height:100dvh!important;"
+            f"min-height:100dvh!important;max-height:none!important;"
+            f"z-index:1000!important;display:block!important;border:0!important;}}"
+            f"[data-testid='stCustomComponentV1']{{"
+            f"position:fixed!important;left:0!important;top:0!important;"
+            f"width:0!important;height:0!important;min-width:0!important;"
+            f"min-height:0!important;padding:0!important;margin:0!important;"
+            f"overflow:visible!important;}}"
+            f"[data-testid='stMainBlockContainer']{{"
+            f"position:relative!important;margin-left:{sidebar_w}!important;"
+            f"width:calc(100% - {sidebar_w})!important;max-width:none!important;"
+            f"padding:14px 20px 24px!important;box-sizing:border-box!important;}}"
+            f"@media(max-width:700px){{[data-testid='stMainBlockContainer']{{padding:8px!important;}}}}"
+            f"</style>",
             unsafe_allow_html=True,
         )
         event = _workspace(
@@ -1372,10 +1359,26 @@ def main():
         )
         if event and process_event(event):
             st.rerun()
-        _render_eda_page()
+        if nav == "eda":
+            _render_eda_page()
+        elif nav == "modeling":
+            _render_modeling_page()
+        # reports placeholder — will be implemented separately
         return
 
-    # ── All other pages ────────────────────────────────────────────────────────
+    # ── Home / Upload / Query — iframe is the full page ──────────────────────
+    # Remove all padding from Streamlit's wrapper so the iframe fills edge-to-edge.
+    st.markdown(
+        "<style>"
+        "[data-testid='stMainBlockContainer']{"
+        "padding:0!important;max-width:100%!important;}"
+        "[data-testid='stCustomComponentV1']{"
+        "width:100%!important;padding:0!important;margin:0!important;}"
+        "iframe[title*='autolytics_workspace']{"
+        "width:100%!important;border:0!important;display:block!important;}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
     event = _workspace(
         **build_component_data(),
         key="autolytics_custom_workspace",
