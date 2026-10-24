@@ -884,7 +884,7 @@ def _render_eda_page() -> None:
             )
         with btn_col:
             gen_clicked = st.button(
-                "✦ Generate EDA", type="primary", width="stretch",
+                "✦ Generate Charts", type="primary", width="stretch",
                 key="btn_gen_charts",
             )
 
@@ -1314,6 +1314,181 @@ def _render_modeling_page() -> None:
             st.error(f"Could not generate prediction: {exc}")
 
 
+
+def _build_full_pdf_report() -> bytes:
+    """Create a PDF containing the stored EDA charts and narrative outputs."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Image as PDFImage, PageBreak,
+        Table, TableStyle, KeepTogether,
+    )
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, rightMargin=17*mm, leftMargin=17*mm,
+        topMargin=16*mm, bottomMargin=16*mm,
+        title="AUTOLYTICS Analysis Report",
+    )
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="AutoTitleR", parent=styles["Title"],
+                              textColor=colors.HexColor("#17396f"), fontSize=22,
+                              leading=26, spaceAfter=8))
+    styles.add(ParagraphStyle(name="AutoHeadingR", parent=styles["Heading2"],
+                              textColor=colors.HexColor("#2864f0"), spaceBefore=12,
+                              spaceAfter=6))
+    styles.add(ParagraphStyle(name="AutoBodyR", parent=styles["BodyText"],
+                              fontSize=9, leading=13, spaceAfter=5))
+    flow = [Paragraph("AUTOLYTICS — Analysis Report", styles["AutoTitleR"])]
+    df = st.session_state.get("cleaned_df")
+    filename = html.escape(str(st.session_state.get("filename") or "Uploaded dataset"))
+    info = st.session_state.get("eda_domain_info") or {}
+    domain_label = html.escape(str(info.get("label", "Not detected")))
+    flow.append(Paragraph(f"<b>Dataset:</b> {filename}", styles["AutoBodyR"]))
+    if df is not None:
+        flow.append(Paragraph(
+            f"<b>Rows:</b> {len(df):,} &nbsp;&nbsp; <b>Columns:</b> {len(df.columns):,}"
+            f" &nbsp;&nbsp; <b>Domain:</b> {domain_label}", styles["AutoBodyR"]))
+    flow.append(Spacer(1, 4*mm))
+
+    charts = st.session_state.get("eda_charts") or []
+    if charts:
+        flow.append(Paragraph("EDA Charts", styles["AutoHeadingR"]))
+        try:
+            import vl_convert as vlc
+        except ImportError:
+            vlc = None
+        for item in charts:
+            title = html.escape(str(item.get("title") or "Chart"))
+            desc = html.escape(str(item.get("desc") or ""))
+            flow.append(Paragraph(title, styles["Heading3"]))
+            if desc:
+                flow.append(Paragraph(desc, styles["AutoBodyR"]))
+            chart = item.get("chart")
+            rendered = False
+            if chart is not None and vlc is not None:
+                try:
+                    png = vlc.vegalite_to_png(chart.to_dict(), scale=1.3)
+                    image_buffer = BytesIO(png)
+                    image = PDFImage(image_buffer, width=165*mm, height=88*mm)
+                    image.hAlign = "CENTER"
+                    flow.append(image)
+                    rendered = True
+                except Exception:
+                    rendered = False
+            if not rendered:
+                cols_used = ", ".join(map(str, item.get("cols_used") or []))
+                flow.append(Paragraph(
+                    "Chart image could not be rendered in this environment."
+                    + (f" Columns: {html.escape(cols_used)}" if cols_used else ""),
+                    styles["AutoBodyR"]))
+            flow.append(Spacer(1, 4*mm))
+    else:
+        flow.append(Paragraph("EDA Charts", styles["AutoHeadingR"]))
+        flow.append(Paragraph("No charts have been generated yet. Open EDA & Charts and click Generate Charts first.",
+                              styles["AutoBodyR"]))
+
+    insights = st.session_state.get("eda_insights") or []
+    flow.append(Paragraph("Key Insights", styles["AutoHeadingR"]))
+    if insights:
+        for item in insights:
+            flow.append(Paragraph("• " + html.escape(str(item).replace("**", "")), styles["AutoBodyR"]))
+    else:
+        flow.append(Paragraph("No key insights are available yet.", styles["AutoBodyR"]))
+
+    story = str(st.session_state.get("eda_story") or "").strip()
+    flow.append(Paragraph("Data Storytelling", styles["AutoHeadingR"]))
+    if story:
+        for para in story.split("\n\n"):
+            flow.append(Paragraph(html.escape(para), styles["AutoBodyR"]))
+    else:
+        flow.append(Paragraph("No data storytelling is available yet.", styles["AutoBodyR"]))
+
+    suggestions = st.session_state.get("eda_suggestions") or []
+    flow.append(Paragraph("Suggestions", styles["AutoHeadingR"]))
+    if suggestions:
+        for item in suggestions:
+            flow.append(Paragraph("• " + html.escape(str(item).replace("**", "")), styles["AutoBodyR"]))
+    else:
+        flow.append(Paragraph("No suggestions are available yet.", styles["AutoBodyR"]))
+
+    doc.build(flow)
+    return buffer.getvalue()
+
+
+def _render_reports_page() -> None:
+    """Display stored EDA results and allow exporting them as one PDF."""
+    df = st.session_state.get("cleaned_df")
+    st.markdown(
+        "<h2 style='margin:0 0 4px;color:#0b1c3a;font-size:25px;font-weight:850'>"
+        "📄 Reports</h2><p style='margin:0 0 18px;color:#52698e;font-size:13px'>"
+        "Review your complete analysis and download it as a PDF report.</p>",
+        unsafe_allow_html=True,
+    )
+    if df is None:
+        st.info("Upload a dataset first to view its report.")
+        return
+
+    info = st.session_state.get("eda_domain_info") or {}
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Dataset", str(st.session_state.get("filename") or "Uploaded data")[:28])
+    k2.metric("Rows", f"{len(df):,}")
+    k3.metric("Columns", f"{len(df.columns):,}")
+    k4.metric("Domain", str(info.get("label", "Not detected")))
+
+    charts = st.session_state.get("eda_charts") or []
+    insights = st.session_state.get("eda_insights") or []
+    story = str(st.session_state.get("eda_story") or "").strip()
+    suggestions = st.session_state.get("eda_suggestions") or []
+
+    if not charts and not insights and not story and not suggestions:
+        st.info("Your report will appear here after you visit EDA & Charts and click Generate Charts.")
+        return
+
+    st.markdown("### 📊 EDA Charts")
+    if charts:
+        _render_chart_cards(charts)
+    else:
+        st.caption("No charts have been generated yet.")
+
+    st.markdown("### 💡 Key Insights")
+    if insights:
+        for item in insights:
+            st.markdown(f"- {str(item).replace('**', '')}")
+    else:
+        st.caption("No key insights available.")
+
+    st.markdown("### 📖 Data Storytelling")
+    if story:
+        for paragraph in story.split("\n\n"):
+            if paragraph.strip():
+                st.write(paragraph)
+    else:
+        st.caption("No storytelling available.")
+
+    st.markdown("### 🎯 Suggestions")
+    if suggestions:
+        for item in suggestions:
+            st.markdown(f"- {str(item).replace('**', '')}")
+    else:
+        st.caption("No suggestions available.")
+
+    st.divider()
+    try:
+        pdf_bytes = _build_full_pdf_report()
+        safe_name = Path(str(st.session_state.get("filename") or "autolytics")).stem
+        st.download_button(
+            "⬇ Generate PDF Report", data=pdf_bytes,
+            file_name=f"{safe_name}_AUTOLYTICS_Report.pdf",
+            mime="application/pdf", type="primary", width="stretch",
+            key="download_full_eda_report",
+        )
+    except Exception as exc:
+        st.error(f"Could not generate the PDF report: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1363,7 +1538,8 @@ def main():
             _render_eda_page()
         elif nav == "modeling":
             _render_modeling_page()
-        # reports placeholder — will be implemented separately
+        elif nav == "reports":
+            _render_reports_page()
         return
 
     # ── Home / Upload / Query — iframe is the full page ──────────────────────
