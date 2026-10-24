@@ -4,16 +4,6 @@ import re
 import warnings
 import numpy as np
 import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score, r2_score, mean_absolute_error, mean_squared_error
-from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, RandomForestRegressor, ExtraTreesRegressor, HistGradientBoostingRegressor, HistGradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression, Ridge
-from sklearn.dummy import DummyClassifier, DummyRegressor
-from sklearn.utils import resample
 
 ID_WORDS = re.compile(r'(^|[_\s-])(id|uuid|guid|index|serial|record|patient id|student id|customer id|order id|transaction id|invoice id)([_\s-]|$)', re.I)
 LEAK_WORDS = re.compile(r'(target|label|outcome|result|prediction|discharge status|final grade|final score)', re.I)
@@ -56,6 +46,15 @@ def target_task(y: pd.Series):
     return 'classification'
 
 def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000):
+    # Keep scikit-learn out of app startup; load it only after Train Model is clicked.
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import f1_score, r2_score
+    from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, RandomForestRegressor, ExtraTreesRegressor
+    from sklearn.linear_model import LogisticRegression, Ridge
     if target not in df.columns: raise ValueError('Choose a valid target column.')
     if len(df) < 20: raise ValueError('At least 20 rows are recommended for a reliable train/test split.')
     y0 = df[target]

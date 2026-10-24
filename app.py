@@ -21,7 +21,6 @@ import streamlit.components.v1 as components
 
 from cleaning import clean_dataset, format_cleaning_summary
 from query import TABLE_NAME, run_user_query
-from modeling import train_best_model, prepare_prediction
 from domain import detect_domain
 
 st.set_page_config(
@@ -124,6 +123,8 @@ def init_state():
         "model_dataset_id": None,
         "model_target": None,
         "model_prediction": None,
+        "domain_cache_key": None,
+        "domain_cache_value": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -201,6 +202,8 @@ def process_event(event) -> bool:
         st.session_state.model_dataset_id = None
         st.session_state.model_target = None
         st.session_state.model_prediction = None
+        st.session_state.domain_cache_key = None
+        st.session_state.domain_cache_value = None
         st.session_state.upload_error = None
 
     elif action == "upload_error":
@@ -231,6 +234,8 @@ def process_event(event) -> bool:
             st.session_state.model_dataset_id = None
             st.session_state.model_target = None
             st.session_state.model_prediction = None
+            st.session_state.domain_cache_key = None
+            st.session_state.domain_cache_value = None
             for key in ("eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                         "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
                         "eda_charts", "eda_dataset_id", "eda_error", "eda_domain",
@@ -804,13 +809,6 @@ def _render_eda_page() -> None:
         )
         return
 
-    # Compute cheap base stats once per dataset
-    try:
-        _ensure_base_eda(df)
-    except Exception as exc:
-        st.error(f"Could not analyse the dataset: {exc}")
-        return
-
     # ── 1. Header + Generate Charts button ──────────────────────────────────
     hdr_l, hdr_r = st.columns([3.2, 2.0], vertical_alignment="center")
     with hdr_l:
@@ -849,6 +847,8 @@ def _render_eda_page() -> None:
     if gen_clicked:
         with st.spinner("Detecting domain and building charts…"):
             try:
+                # EDA profiling is deferred until the user explicitly requests analysis.
+                _ensure_base_eda(df)
                 charts = _generate_auto_charts(df)
                 st.session_state.eda_charts = charts
                 st.session_state.eda_error  = None
@@ -1140,11 +1140,18 @@ def _render_modeling_page() -> None:
         st.session_state.model_info = None
         st.session_state.model_prediction = None
         st.session_state.model_dataset_id = dataset_id
-    try:
-        domain_info = detect_domain(df)
-        domain_label = domain_info.get("label", "General") if isinstance(domain_info, dict) else str(domain_info)
-    except Exception:
-        domain_label = "General"
+    # Domain detection is cached per uploaded dataset; ordinary widget reruns reuse it.
+    domain_key = (st.session_state.get("filename"), len(df), len(df.columns), tuple(map(str, df.columns)))
+    if st.session_state.get("domain_cache_key") != domain_key:
+        try:
+            domain_info = detect_domain(df)
+            domain_label = domain_info.get("label", "General") if isinstance(domain_info, dict) else str(domain_info)
+        except Exception:
+            domain_label = "General"
+        st.session_state.domain_cache_key = domain_key
+        st.session_state.domain_cache_value = domain_label
+    else:
+        domain_label = st.session_state.get("domain_cache_value", "General")
     st.markdown(f"<div class='model-dataset'><div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center'><div><b>▤ &nbsp;{html.escape(str(st.session_state.get('filename') or 'Uploaded dataset'))}</b> &nbsp; <span style='background:#dcf8ef;color:#07855f;padding:4px 9px;border-radius:20px;font-size:11px;font-weight:700'>✓ Cleaned</span><div class='model-muted' style='margin-top:7px'>{len(df):,} rows &nbsp; · &nbsp; {len(df.columns)} columns &nbsp; · &nbsp; {html.escape(str(domain_label))}</div></div><div style='background:#eef6ff;border-radius:8px;padding:10px 18px;color:#1256ad'><b>Detected Domain</b><br>{html.escape(str(domain_label))}</div></div></div>", unsafe_allow_html=True)
     st.markdown("<div class='model-step'>1. Select Target Variable</div><p class='model-muted'>Choose the column you want to predict. The application will automatically detect the model type and configure the best model.</p>", unsafe_allow_html=True)
     left, right, action = st.columns([1.35, 1, .58], gap="medium")
@@ -1166,6 +1173,8 @@ def _render_modeling_page() -> None:
     st.markdown("<div class='model-step'>2. Model Training</div><p class='model-muted'>Training starts when you click Train Model. Evaluation uses a held-out test split; the selected pipeline is then refit on the available valid rows.</p>", unsafe_allow_html=True)
     if train_clicked:
         try:
+            # Import scikit-learn-backed code only when the user explicitly trains.
+            from modeling import train_best_model
             with st.status("Preparing data and comparing models…", expanded=True) as status:
                 st.write("Validating target and selecting suitable features")
                 info = train_best_model(df, target)
@@ -1233,6 +1242,7 @@ def _render_modeling_page() -> None:
             st.caption("Classification probabilities are model estimates, not guarantees of real-world certainty.")
     if predict_clicked:
         try:
+            from modeling import prepare_prediction
             X_new = prepare_prediction(raw_values, info)
             prediction = info['pipeline'].predict(X_new)[0]
             out = {'prediction': prediction.item() if hasattr(prediction, 'item') else prediction, 'probabilities': None}
