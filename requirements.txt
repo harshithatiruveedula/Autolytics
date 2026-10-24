@@ -13,3 +13,5 @@ duckdb>=0.10
 
 # PDF report export
 reportlab>=4.0
+
+scikit-learn>=1.3

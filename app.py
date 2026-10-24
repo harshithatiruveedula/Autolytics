@@ -15,6 +15,8 @@ import streamlit.components.v1 as components
 
 from cleaning import clean_dataset, format_cleaning_summary
 from query import TABLE_NAME, run_user_query
+from modeling import train_best_model, prepare_prediction
+from domain import detect_domain
 
 st.set_page_config(
     page_title="AUTOLYTICS | Data Analytics",
@@ -112,6 +114,10 @@ def init_state():
         # generated charts: list[{id, title, desc, kind, cols_used, chart}]
         "eda_charts": None,
         "eda_error": None,
+        "model_info": None,
+        "model_dataset_id": None,
+        "model_target": None,
+        "model_prediction": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -185,6 +191,10 @@ def process_event(event) -> bool:
                     "eda_domain_info", "eda_suggestions", "eda_story"):
             st.session_state[key] = None if key != "file_size" else 0
         st.session_state.preview_page = 1
+        st.session_state.model_info = None
+        st.session_state.model_dataset_id = None
+        st.session_state.model_target = None
+        st.session_state.model_prediction = None
         st.session_state.upload_error = None
 
     elif action == "upload_error":
@@ -211,6 +221,10 @@ def process_event(event) -> bool:
             st.session_state.query_error = None
             st.session_state.upload_error = None
             st.session_state.preview_page = 1
+            st.session_state.model_info = None
+            st.session_state.model_dataset_id = None
+            st.session_state.model_target = None
+            st.session_state.model_prediction = None
             for key in ("eda_kpis", "eda_insights", "eda_profile", "eda_stats",
                         "eda_outliers", "eda_missing", "eda_corr_df", "eda_cols",
                         "eda_charts", "eda_dataset_id", "eda_error", "eda_domain",
@@ -1088,6 +1102,142 @@ def _build_report_text(filename: str | None) -> bytes:
 
 
 # ---------------------------------------------------------------------------
+# Modeling page
+# ---------------------------------------------------------------------------
+def _render_modeling_page() -> None:
+    df = st.session_state.get("cleaned_df")
+    st.markdown("""
+    <style>
+    .model-hero{display:flex;align-items:center;gap:16px;margin:8px 0 16px}
+    .model-hero-icon{width:68px;height:68px;border-radius:13px;background:#e2efff;color:#0878ff;display:flex;align-items:center;justify-content:center;font-size:34px;flex-shrink:0}
+    .model-hero h1{font-size:27px!important;color:#0c2047!important;margin:0!important;font-weight:850!important}
+    .model-hero p{color:#5b78b1;font-size:13px;margin:4px 0 0}
+    .model-dataset{border:1px solid #d9e7ff;background:#fff;border-radius:10px;padding:14px 18px;margin:0 0 16px;color:#132951}
+    .model-muted{font-size:12px;color:#6780ae}
+    .model-config{background:#f0f7ff;border-radius:9px;padding:14px 17px;color:#2457a5;font-size:12px;line-height:2}
+    .model-result{border:1px solid #d8e7fb;background:#f8fbff;border-radius:10px;padding:16px}
+    .model-result-value{font-size:24px;font-weight:850;color:#078a65;overflow-wrap:anywhere}
+    .model-step{color:#0c2047;font-size:16px;font-weight:800;margin-bottom:4px}
+    [data-testid="stMainBlockContainer"]{padding-top:16px!important}
+    @media(max-width:700px){.model-hero h1{font-size:23px!important}.model-hero-icon{width:52px;height:52px}}
+    </style>
+    <div class="model-hero"><div class="model-hero-icon">♧</div><div><h1>Modeling</h1><p>Automatically detect the best model, train it and make predictions from your data.</p></div></div>
+    """, unsafe_allow_html=True)
+    if df is None or df.empty:
+        st.info("Upload a dataset first. The Modeling page will use the cleaned dataset already stored in AUTOLYTICS.")
+        return
+    dataset_id = f"{st.session_state.get('filename')}:{len(df)}:{len(df.columns)}:{hash(tuple(map(str, df.columns)))}"
+    if st.session_state.get("model_dataset_id") != dataset_id:
+        st.session_state.model_info = None
+        st.session_state.model_prediction = None
+        st.session_state.model_dataset_id = dataset_id
+    try:
+        domain_info = detect_domain(df)
+        domain_label = domain_info.get("label", "General") if isinstance(domain_info, dict) else str(domain_info)
+    except Exception:
+        domain_label = "General"
+    st.markdown(f"<div class='model-dataset'><div style='display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center'><div><b>▤ &nbsp;{html.escape(str(st.session_state.get('filename') or 'Uploaded dataset'))}</b> &nbsp; <span style='background:#dcf8ef;color:#07855f;padding:4px 9px;border-radius:20px;font-size:11px;font-weight:700'>✓ Cleaned</span><div class='model-muted' style='margin-top:7px'>{len(df):,} rows &nbsp; · &nbsp; {len(df.columns)} columns &nbsp; · &nbsp; {html.escape(str(domain_label))}</div></div><div style='background:#eef6ff;border-radius:8px;padding:10px 18px;color:#1256ad'><b>Detected Domain</b><br>{html.escape(str(domain_label))}</div></div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='model-step'>1. Select Target Variable</div><p class='model-muted'>Choose the column you want to predict. The application will automatically detect the model type and configure the best model.</p>", unsafe_allow_html=True)
+    left, right, action = st.columns([1.35, 1, .58], gap="medium")
+    with left:
+        target = st.selectbox("Target Variable", options=list(map(str, df.columns)), key="model_target_selector", help="Choose the outcome you want the model to learn.")
+    with right:
+        st.markdown("<div class='model-config'><b>✦ &nbsp;Auto Configuration</b><br>✓ &nbsp; Detects classification / regression<br>✓ &nbsp; Selects suitable algorithms<br>✓ &nbsp; Handles missing values and encodes categories<br>✓ &nbsp; Scales numerical features when needed<br>✓ &nbsp; Chooses task-appropriate metrics</div>", unsafe_allow_html=True)
+    with action:
+        st.write("")
+        st.write("")
+        train_clicked = st.button("▶  Train Model", type="primary", use_container_width=True, key="model_train_button")
+    current_model = st.session_state.get("model_info")
+    if current_model and current_model.get("target") != target:
+        st.session_state.model_info = None
+        st.session_state.model_prediction = None
+        current_model = None
+        st.caption("Target changed. Train the model again to use the new target.")
+    st.divider()
+    st.markdown("<div class='model-step'>2. Model Training</div><p class='model-muted'>Training starts when you click Train Model. Evaluation uses a held-out test split; the selected pipeline is then refit on the available valid rows.</p>", unsafe_allow_html=True)
+    if train_clicked:
+        try:
+            with st.status("Preparing data and comparing models…", expanded=True) as status:
+                st.write("Validating target and selecting suitable features")
+                info = train_best_model(df, target)
+                st.write("Preprocessing features and comparing candidate algorithms")
+                st.write(f"Best model: {info['model_name']} · {info['metric']}: {info['best_score']:.3f}")
+                status.update(label="Model training completed", state="complete", expanded=False)
+            st.session_state.model_info = info
+            st.session_state.model_prediction = None
+            current_model = info
+            st.success(f"Training completed. {info['model_name']} selected using {info['metric']} ({info['best_score']:.3f}).")
+        except Exception as exc:
+            st.session_state.model_info = None
+            current_model = None
+            st.error(str(exc))
+    if current_model:
+        st.markdown(f"<div class='model-result'><b>✓ Model ready</b><br><span class='model-muted'>Task: {html.escape(current_model['task'].title())} · Best model: {html.escape(current_model['model_name'])} · Train rows: {current_model['train_rows']:,} · Test rows: {current_model['test_rows']:,}</span></div>", unsafe_allow_html=True)
+        with st.expander("Model comparison details"):
+            results = pd.DataFrame(current_model['results'])
+            if 'score' in results: results['score'] = results['score'].map(lambda x: round(x, 4) if pd.notna(x) else x)
+            st.dataframe(results, use_container_width=True, hide_index=True)
+    else:
+        st.info("Training has not started. Select a target variable and click Train Model.")
+    st.divider()
+    st.markdown("<div class='model-step'>3. Make Predictions</div><p class='model-muted'>Enter values for the features used by the trained model. No additional file upload is needed.</p>", unsafe_allow_html=True)
+    if not current_model:
+        st.info("Select a target and train a model before making predictions.")
+        return
+    info = current_model
+    raw_values = {}
+    feature_cols = info['features']
+    form_left, form_right = st.columns([1, 1], gap="medium")
+    with form_left:
+        with st.form("model_prediction_form", clear_on_submit=False):
+            st.markdown("**Input Details**")
+            grid = st.columns(3)
+            for idx, col in enumerate(feature_cols):
+                series = df[col]
+                nonnull = series.dropna()
+                with grid[idx % 3]:
+                    if pd.api.types.is_numeric_dtype(series):
+                        numeric = pd.to_numeric(series, errors='coerce').dropna()
+                        default = float(numeric.median()) if not numeric.empty else 0.0
+                        if pd.api.types.is_integer_dtype(series) and abs(default) < 1e12:
+                            raw_values[col] = st.number_input(str(col), value=int(round(default)), step=1, key=f"model_input_{col}")
+                        else:
+                            raw_values[col] = st.number_input(str(col), value=default, key=f"model_input_{col}", format="%.4f")
+                    else:
+                        vals = nonnull.astype(str).drop_duplicates().tolist()
+                        if 0 < len(vals) <= 50:
+                            raw_values[col] = st.selectbox(str(col), vals, key=f"model_input_{col}")
+                        else:
+                            raw_values[col] = st.text_input(str(col), value=str(nonnull.mode().iloc[0]) if not nonnull.empty else "", key=f"model_input_{col}")
+            predict_clicked = st.form_submit_button("✦  Predict", type="primary", use_container_width=True)
+    with form_right:
+        st.markdown("**Prediction Result**")
+        result = st.session_state.get("model_prediction")
+        if result is None:
+            st.markdown("<div class='model-result'><span class='model-muted'>Your prediction will appear here after you enter the feature values and click Predict.</span></div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='model-result'><div class='model-muted'>Predicted {html.escape(info['target'])}</div><div class='model-result-value'>{html.escape(str(result['prediction']))}</div></div>", unsafe_allow_html=True)
+            if result.get('probabilities'):
+                st.markdown("**Class probabilities**")
+                for cls, prob in result['probabilities']:
+                    st.write(f"{cls}: {prob:.1%}")
+            st.caption("Classification probabilities are model estimates, not guarantees of real-world certainty.")
+    if predict_clicked:
+        try:
+            X_new = prepare_prediction(raw_values, info)
+            prediction = info['pipeline'].predict(X_new)[0]
+            out = {'prediction': prediction.item() if hasattr(prediction, 'item') else prediction, 'probabilities': None}
+            if info['task'] == 'classification' and hasattr(info['pipeline'].named_steps['model'], 'predict_proba'):
+                probs = info['pipeline'].predict_proba(X_new)[0]
+                classes = info['pipeline'].named_steps['model'].classes_
+                out['probabilities'] = sorted([(str(c), float(p)) for c,p in zip(classes, probs)], key=lambda x:x[1], reverse=True)[:5]
+            st.session_state.model_prediction = out
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not generate prediction: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1103,6 +1253,17 @@ def main():
     #   1. CSS: display:none removes the iframe from layout flow entirely.
     #   2. index.html reports height:1 (not scrollHeight) for the EDA page,
     #      so Streamlit never allocates space for the component wrapper.
+    if nav == "modeling":
+        st.markdown(
+            "<style>iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{position:fixed!important;left:0!important;top:0!important;width:188px!important;height:100vh!important;min-height:100vh!important;z-index:1000!important;display:block!important;border:0!important;}[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;overflow:visible!important;}[data-testid='stMainBlockContainer']{position:relative!important;margin-left:188px!important;width:calc(100% - 188px)!important;max-width:none!important;padding:14px 24px 24px!important;box-sizing:border-box!important}@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;margin-left:188px!important;width:calc(100% - 188px)!important}}</style>",
+            unsafe_allow_html=True,
+        )
+        event = _workspace(**build_component_data(), key="autolytics_custom_workspace", default=None)
+        if event and process_event(event):
+            st.rerun()
+        _render_modeling_page()
+        return
+
     if nav == "eda":
         st.markdown(
             "<style>"
