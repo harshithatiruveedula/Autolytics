@@ -4,22 +4,22 @@
    Python renders the analytics content beside it to avoid nested page layouts. */
 .layout{width:100%;max-width:100%;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;height:auto;background:var(--bg);border-radius:12px;overflow:visible}
 .layout.eda-mode{grid-template-columns:248px minmax(0,1fr);min-height:100vh;height:auto;overflow:visible;border-radius:0;background:var(--bg)}
-.layout.eda-mode.is-collapsed{grid-template-columns:64px minmax(0,1fr)}
+.layout.is-collapsed{grid-template-columns:64px minmax(0,1fr)}
 .sidebar{background:linear-gradient(180deg,#0b1b38,#0c2147);color:white;display:flex;flex-direction:column;padding:18px 8px;min-height:100vh;height:100vh}
 .layout.eda-mode .sidebar{min-height:100vh;height:100vh;padding:14px 8px;position:relative}
 .eda-nav-toggle{width:100%;height:34px;border:1px solid #2d4772;background:#10294f;color:#dce8ff;border-radius:7px;cursor:pointer;margin-bottom:14px;font-size:16px}
 .eda-nav-toggle:hover{background:#1b3a6b}
-.layout.eda-mode .sidebar-collapsed{width:64px;min-width:64px;padding:14px 6px;overflow:hidden}
-.layout.eda-mode .sidebar-collapsed .eda-nav-toggle{width:50px;min-width:50px;padding:0}
-.layout.eda-mode .sidebar-collapsed .nav{width:50px;min-width:50px;min-height:42px;box-sizing:border-box}
-.layout.eda-mode .sidebar-collapsed .navicon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 20px}
-.layout.eda-mode .sidebar-collapsed .nav.active::before{inset:-90%}
-.layout.eda-mode .sidebar-collapsed .brand{justify-content:center;padding:0 0 24px}
-.layout.eda-mode .sidebar-collapsed .brand>div:last-child{display:none}
-.layout.eda-mode .sidebar-collapsed .nav{justify-content:center;padding:10px 3px;gap:0;font-size:0}
-.layout.eda-mode .sidebar-collapsed .navlabel{display:none}
-.layout.eda-mode .sidebar-collapsed .navicon{font-size:19px;width:auto}
-.layout.eda-mode .sidebar-collapsed .quote{display:none}
+.sidebar.sidebar-collapsed{width:64px;min-width:64px;padding:14px 6px;overflow:hidden}
+.sidebar.sidebar-collapsed .eda-nav-toggle{width:50px;min-width:50px;padding:0}
+.sidebar.sidebar-collapsed .nav{width:50px;min-width:50px;min-height:42px;box-sizing:border-box}
+.sidebar.sidebar-collapsed .navicon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 20px}
+.sidebar.sidebar-collapsed .nav.active::before{inset:-90%}
+.sidebar.sidebar-collapsed .brand{justify-content:center;padding:0 0 24px}
+.sidebar.sidebar-collapsed .brand>div:last-child{display:none}
+.sidebar.sidebar-collapsed .nav{justify-content:center;padding:10px 3px;gap:0;font-size:0}
+.sidebar.sidebar-collapsed .navlabel{display:none}
+.sidebar.sidebar-collapsed .navicon{font-size:19px;width:auto}
+.sidebar.sidebar-collapsed .quote{display:none}
 .layout.eda-mode .brand{gap:8px;padding:0 5px 27px}.layout.eda-mode .mark{width:34px;height:34px;border-radius:8px;font-size:19px}.layout.eda-mode .brandname{font-size:14px}.layout.eda-mode .tagline{font-size:9px}.layout.eda-mode .nav{font-size:12px;padding:11px 8px;gap:9px}.layout.eda-mode .quote{font-size:11px;padding:20px 6px 8px}
 .brand{display:flex;gap:12px;align-items:center;padding:0 8px 32px}.mark{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#4788ff,#204bd7);display:grid;place-items:center;font-size:24px;font-weight:850}.brandname{font-weight:850;font-size:17px;letter-spacing:.04em}.tagline{color:#a8bbdf;font-size:11px;margin-top:3px}
 .nav{display:flex;align-items:center;gap:13px;padding:13px 14px;border-radius:9px;color:#d5e0f5;font-size:14px;margin:3px 0;cursor:pointer;border:1px solid transparent}.nav:hover{background:#172e54}
@@ -192,9 +192,9 @@ function scrollToSection(sectionId){
 /* ── Sidebar HTML ────────────────────────────────────────────────────── */
 function sidebar(){
   const nav=args.nav||'home';
-  const collapsed = !!args.sidebar_collapsed && nav === 'eda';
+  const collapsed = !!args.sidebar_collapsed;
   return `<aside class="sidebar ${collapsed ? 'sidebar-collapsed' : ''}">
-    ${nav === 'eda' ? `<button class="eda-nav-toggle" data-sidebar-toggle title="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}">${collapsed ? '»' : '«'}</button>` : ''}
+    <button class="eda-nav-toggle" data-sidebar-toggle title="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}">${collapsed ? '»' : '«'}</button>
     <div class="brand"><div class="mark">A</div><div><div class="brandname">AUTOLYTICS</div><div class="tagline">From Data to Decisions</div></div></div>
     ${navItem('Home','home','⌂')}
     ${navItem('Upload Dataset','upload','⇧')}
@@ -211,7 +211,7 @@ function renderEda(){
   // Keep the custom AUTOLYTICS navigation visible while the Streamlit-native
   // EDA dashboard renders in the parent page. The iframe is fixed to the
   // sidebar width by app.py, so this shell must not render duplicate content.
-  const collapsed = !!args.sidebar_collapsed && (args.nav||'home') === 'eda';
+  const collapsed = !!args.sidebar_collapsed;
   return `<div class="layout eda-mode ${collapsed ? 'is-collapsed' : ''}">${sidebar()}<main class="main" aria-hidden="true"></main></div>`;
 }
 
@@ -222,7 +222,7 @@ function renderHome(){
   const rows=data.rows||[],cols=data.columns||[],total=data.total_rows||0;
   const file=args.file||null;
 
-  let html=`<div class="layout">${sidebar()}<main class="main">`;
+  let html=`<div class="layout ${args.sidebar_collapsed ? 'is-collapsed' : ''}">${sidebar()}<main class="main">`;
 
   /* Hero / Upload section — always visible on home page */
   const uploadHighlight=nav==='upload'?'rotating-highlight':'';
@@ -333,13 +333,13 @@ function render(){
   }
   if(nav==='modeling'){
     // Modeling page: Python renders all content; iframe is sidebar-only via fixed CSS.
-    root.innerHTML=`<div class="layout">${sidebar()}<main class="main"></main></div>`;
+    root.innerHTML=`<div class="layout ${args.sidebar_collapsed ? 'is-collapsed' : ''}">${sidebar()}<main class="main"></main></div>`;
     bindCommon();
     window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
     return;
   }
   if(nav==='reports'){
-    root.innerHTML=`<div class="layout">${sidebar()}<main class="main"></main></div>`;
+    root.innerHTML=`<div class="layout ${args.sidebar_collapsed ? 'is-collapsed' : ''}">${sidebar()}<main class="main"></main></div>`;
     bindCommon();
     window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:1},'*');
     return;
