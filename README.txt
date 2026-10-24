@@ -1,5 +1,7 @@
-AUTOLYTICS fix for ImportError: cannot import module 'modeling'.
+AUTOLYTICS modeling.py repair
 
-Upload modeling.py to the SAME GitHub repository folder as app.py (repository root, unless app.py is in a subfolder).
-Do not upload only app.py: app.py imports functions from modeling.py.
-Commit and push, then reboot/redeploy the Streamlit app.
+This modeling.py was rebuilt from the modeling source you uploaded and syntax-checked.
+Replace the existing modeling.py in the same GitHub directory as the deployed app.py.
+Commit the change and wait for Streamlit Cloud to pull the new commit.
+After deploy, verify the GitHub file has the top-level function: def get_target_candidates(df: pd.DataFrame)
+Do not rename the file or place it in a different folder from app.py.
