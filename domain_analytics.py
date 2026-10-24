@@ -256,7 +256,7 @@ def _bar_count(df: pd.DataFrame, col: str, title: str, desc: str) -> dict[str, A
     if data.empty: return None
     c = alt.Chart(data).mark_bar(cornerRadiusEnd=3).encode(
         x=alt.X("count:Q", title="Record Count"),
-        y=alt.Y("category:N", sort="-x", title=col, axis=alt.Axis(labelLimit=420, labelOverlap=False, labelFontSize=12, labelPadding=6)),
+        y=alt.Y("category:N", sort="-x", title=col, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
         color=alt.Color("category:N", scale=alt.Scale(range=PALETTE), legend=None),
         tooltip=[alt.Tooltip("category:N", title=col), alt.Tooltip("count:Q", title="Records")]
     ).properties(height=max(220, min(520, len(data)*34)), padding={"left": 8, "right": 18, "top": 8, "bottom": 8})
@@ -284,10 +284,10 @@ def _cat_num(df: pd.DataFrame, cat: str, num: str, title: str, desc: str, agg: s
     metric_label = "Total" if agg == "sum" else "Median" if agg == "median" else "Average"
     c = alt.Chart(grouped).mark_bar(cornerRadiusEnd=3).encode(
         x=alt.X("value:Q", title=f"{metric_label} {num}"),
-        y=alt.Y("category:N", sort="-x", title=cat, axis=alt.Axis(labelLimit=420, labelOverlap=False, labelFontSize=12, labelPadding=6)),
+        y=alt.Y("category:N", sort="-x", title=cat, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
         color=alt.Color("category:N", scale=alt.Scale(range=PALETTE), legend=None),
         tooltip=[alt.Tooltip("category:N", title=cat), alt.Tooltip("value:Q", title=num, format=",.2f")]
-    ).properties(height=max(240, min(520, len(grouped)*36)), padding={"left": 8, "right": 18, "top": 8, "bottom": 8})
+    ).properties(height=max(280, min(620, len(grouped)*44)), padding={"left": 12, "right": 20, "top": 10, "bottom": 10})
     return _chart(title, desc, "cat_num_bar", [cat, num], c)
 
 
@@ -301,10 +301,10 @@ def _cat_cat(df: pd.DataFrame, cat_a: str, cat_b: str, title: str, desc: str) ->
     agg = s.groupby([cat_a, cat_b]).size().reset_index(name="count")
     c = alt.Chart(agg).mark_bar().encode(
         x=alt.X("count:Q", title="Record Count"),
-        y=alt.Y(f"{cat_a}:N", sort="-x", title=cat_a, axis=alt.Axis(labelLimit=420, labelOverlap=False, labelFontSize=12, labelPadding=6)),
+        y=alt.Y(f"{cat_a}:N", sort="-x", title=cat_a, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
         color=alt.Color(f"{cat_b}:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title=cat_b, orient="bottom", columns=3)),
         tooltip=[f"{cat_a}:N", f"{cat_b}:N", alt.Tooltip("count:Q", title="Records")]
-    ).properties(height=max(240, min(500, s[cat_a].nunique()*38)))
+    ).properties(height=max(300, min(620, s[cat_a].nunique()*48)), padding={"left": 12, "right": 20, "top": 10, "bottom": 10})
     return _chart(title, desc, "cat_cat", [cat_a, cat_b], c)
 
 

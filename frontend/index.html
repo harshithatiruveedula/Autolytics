@@ -153,35 +153,40 @@ function sendQuery(value){
 function scrollToSection(sectionId){
   const el=document.getElementById(sectionId);
   if(!el)return;
-  // Apply the rotating highlight animation to the section
   el.classList.add('rotating-highlight');
-  // Remove after 4 s so repeated clicks re-trigger it
   clearTimeout(el._highlightTimer);
   el._highlightTimer=setTimeout(()=>el.classList.remove('rotating-highlight'),4000);
-  // Try to scroll the parent (Streamlit) page to this element
+
+  // Streamlit's visible page is usually scrolled by an app-view container,
+  // not by window/document. Scroll that real container, using the iframe's
+  // position plus the section's position inside this component.
   try{
-    const frame=window.frameElement;
     const parent=window.parent;
-    if(frame&&parent&&parent!==window){
-      const frameTop=frame.getBoundingClientRect().top+parent.scrollY;
-      const elTop=el.getBoundingClientRect().top;
-      const targetScroll=Math.max(0,frameTop+elTop-parent.innerHeight*0.15);
-      const scroller=parent.document.scrollingElement||parent.document.documentElement;
-      scroller.scrollTo({top:targetScroll,behavior:'smooth'});
-    }
-  }catch(e){}
-  // The home page content is one tall Streamlit component. Let the parent
-  // document own vertical scrolling; scrolling inside this iframe can trap
-  // the wheel and make it impossible to return to the top. Only use the
-  // iframe fallback when parent scrolling is genuinely unavailable.
-  try{
     const frame=window.frameElement;
-    const parent=window.parent;
-    const scroller=parent.document.scrollingElement||parent.document.documentElement;
-    if(!(frame&&parent&&parent!==window&&scroller)){
-      el.scrollIntoView({behavior:'smooth',block:'start'});
-    }
-  }catch(e){ /* cross-origin parent: leave normal page scrolling intact */ }
+    if(!frame || !parent || parent===window) return;
+    const doc=parent.document;
+    const candidates=[
+      doc.querySelector('[data-testid="stAppViewContainer"]'),
+      doc.querySelector('[data-testid="stMain"]'),
+      doc.querySelector('section.main'),
+      doc.scrollingElement,
+      doc.documentElement
+    ].filter(Boolean);
+    let scroller=candidates.find(node=>node.scrollHeight>node.clientHeight+4 &&
+      (parent.getComputedStyle(node).overflowY==='auto'||parent.getComputedStyle(node).overflowY==='scroll'||node===doc.scrollingElement||node===doc.documentElement));
+    if(!scroller) scroller=candidates[0];
+    const frameRect=frame.getBoundingClientRect();
+    const elRect=el.getBoundingClientRect();
+    const scrollRect=scroller===doc.scrollingElement||scroller===doc.documentElement
+      ? {top:0}:scroller.getBoundingClientRect();
+    const currentTop=scroller.scrollTop||0;
+    const target=currentTop+frameRect.top-scrollRect.top+elRect.top-24;
+    if(typeof scroller.scrollTo==='function') scroller.scrollTo({top:Math.max(0,target),behavior:'smooth'});
+    else scroller.scrollTop=Math.max(0,target);
+  }catch(e){
+    // Never scroll the iframe itself: doing so can trap the user's wheel and
+    // prevent them from returning to the top of the Streamlit page.
+  }
 }
 
 /* ── Sidebar HTML ────────────────────────────────────────────────────── */
