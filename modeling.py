@@ -8,6 +8,18 @@ import pandas as pd
 ID_WORDS = re.compile(r'(^|[_\s-])(id|uuid|guid|index|serial|record|patient id|student id|customer id|order id|transaction id|invoice id)([_\s-]|$)', re.I)
 LEAK_WORDS = re.compile(r'(target|label|outcome|result|prediction|discharge status|final grade|final score|actual .*|post.?event|after .*|recovery status)', re.I)
 NON_FEATURE_WORDS = re.compile(r'(name|email|phone|mobile|address|postcode|zip.?code|notes?|comments?|description|free.?text|url|website|password|token)', re.I)
+# Personal/demographic columns are not useful prediction targets or user-entered
+# prediction inputs in this generic modelling workflow.
+PERSONAL_FIELD_WORDS = re.compile(
+    r'(^|[_\\s-])(age|gender|sex|dob|date of birth|birth date|birthdate|'
+    r'first name|last name|full name|patient name|student name|customer name|'
+    r'employee name|doctor name)([_\\s-]|$)', re.I
+)
+
+def _is_personal_field(name: str) -> bool:
+    normalized = re.sub(r'[_\\-]+', ' ', str(name).strip())
+    return bool(PERSONAL_FIELD_WORDS.search(normalized))
+
 
 def get_target_candidates(df: pd.DataFrame) -> list[str]:
     """Return plausible outcome columns, excluding IDs, constants, dates and free text."""
@@ -23,7 +35,7 @@ def get_target_candidates(df: pd.DataFrame) -> list[str]:
             continue
         if not pd.api.types.is_numeric_dtype(series) and _is_identifier(series, str(col)):
             continue
-        if NON_FEATURE_WORDS.search(str(col)):
+        if NON_FEATURE_WORDS.search(str(col)) or _is_personal_field(str(col)):
             continue
         if pd.api.types.is_datetime64_any_dtype(series) or re.search(r'(^|[_\s-])(date|datetime|timestamp)([_\s-]|$)', str(col), re.I):
             continue
@@ -111,7 +123,7 @@ def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000)
     # uses column metadata only (not target values), so it does not leak test labels.
     useful_features = []
     for col in features:
-        if NON_FEATURE_WORDS.search(str(col)):
+        if NON_FEATURE_WORDS.search(str(col)) or _is_personal_field(str(col)):
             continue
         if LEAK_WORDS.search(str(col)):
             continue
