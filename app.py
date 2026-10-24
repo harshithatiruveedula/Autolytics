@@ -1,4 +1,5 @@
 from __future__ import annotations
+import numpy as np
 
 # dotenv is optional on Streamlit Cloud; environment variables can also be
 # configured directly in the deployment's Secrets/settings.
