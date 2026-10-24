@@ -13,6 +13,7 @@ from sklearn.metrics import accuracy_score, f1_score, r2_score, mean_absolute_er
 from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier, RandomForestRegressor, ExtraTreesRegressor, HistGradientBoostingRegressor, HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.dummy import DummyClassifier, DummyRegressor
+from sklearn.utils import resample
 
 ID_WORDS = re.compile(r'(^|[_\s-])(id|uuid|guid|index|serial|record|patient id|student id|customer id|order id|transaction id|invoice id)([_\s-]|$)', re.I)
 LEAK_WORDS = re.compile(r'(target|label|outcome|result|prediction|discharge status|final grade|final score)', re.I)
@@ -54,7 +55,7 @@ def target_task(y: pd.Series):
         raise ValueError('This target has too many distinct text values to learn reliably. Choose a category or numeric outcome instead.')
     return 'classification'
 
-def train_best_model(df: pd.DataFrame, target: str):
+def train_best_model(df: pd.DataFrame, target: str, max_train_rows: int = 18000):
     if target not in df.columns: raise ValueError('Choose a valid target column.')
     if len(df) < 20: raise ValueError('At least 20 rows are recommended for a reliable train/test split.')
     y0 = df[target]
@@ -73,6 +74,19 @@ def train_best_model(df: pd.DataFrame, target: str):
         if work[c].nunique(dropna=True) <= 1: continue
         features.append(c)
     if not features: raise ValueError('No suitable predictor columns were found after excluding identifiers and unusable fields.')
+    # Bound runtime on large uploads: model selection uses a reproducible representative
+    # sample, while the final selected pipeline is fitted on a larger bounded sample.
+    # This prevents multi-minute browser waits on 50k+ row datasets.
+    if len(work) > max_train_rows:
+        if task == 'classification':
+            try:
+                kept_idx, _ = train_test_split(work.index, train_size=max_train_rows, random_state=42, stratify=y)
+            except ValueError:
+                kept_idx = work.sample(n=max_train_rows, random_state=42).index
+        else:
+            kept_idx = work.sample(n=max_train_rows, random_state=42).index
+        work = work.loc[kept_idx]
+        y = y.loc[kept_idx]
     X = _date_expand(work[features])
     # Ensure mixed object columns are handled consistently as categories.
     for c in X.columns:
@@ -88,12 +102,12 @@ def train_best_model(df: pd.DataFrame, target: str):
     if task=='classification':
         counts=y.value_counts(); stratify=y if counts.min()>=2 else None
         X_train,X_test,y_train,y_test=train_test_split(X,y,test_size=.25,random_state=42,stratify=stratify)
-        models=[('Random Forest',RandomForestClassifier(n_estimators=180,random_state=42,class_weight='balanced_subsample',n_jobs=-1)),('Extra Trees',ExtraTreesClassifier(n_estimators=180,random_state=42,class_weight='balanced',n_jobs=-1)),('Logistic Regression',LogisticRegression(max_iter=1500,class_weight='balanced'))]
+        models=[('Random Forest',RandomForestClassifier(n_estimators=60,random_state=42,class_weight='balanced_subsample',n_jobs=-1, max_depth=18, min_samples_leaf=2)),('Extra Trees',ExtraTreesClassifier(n_estimators=60,random_state=42,class_weight='balanced',n_jobs=-1, max_depth=18, min_samples_leaf=2)),('Logistic Regression',LogisticRegression(max_iter=1500,class_weight='balanced'))]
         scoring=lambda yt,yp: f1_score(yt,yp,average='weighted',zero_division=0)
         metric='Weighted F1'
     else:
         X_train,X_test,y_train,y_test=train_test_split(X,y,test_size=.25,random_state=42)
-        models=[('Random Forest',RandomForestRegressor(n_estimators=180,random_state=42,n_jobs=-1)),('Extra Trees',ExtraTreesRegressor(n_estimators=180,random_state=42,n_jobs=-1)),('Ridge Regression',Ridge())]
+        models=[('Random Forest',RandomForestRegressor(n_estimators=60,random_state=42,n_jobs=-1, max_depth=18, min_samples_leaf=2)),('Extra Trees',ExtraTreesRegressor(n_estimators=60,random_state=42,n_jobs=-1, max_depth=18, min_samples_leaf=2)),('Ridge Regression',Ridge())]
         scoring=lambda yt,yp: r2_score(yt,yp) if len(yt)>1 else -1
         metric='R²'
     results=[]; fitted=[]
@@ -109,7 +123,8 @@ def train_best_model(df: pd.DataFrame, target: str):
             results.append({'name':name,'error':str(exc)[:220],'metric':metric})
     if not fitted: raise ValueError('All candidate models failed. Check target values and column types.')
     best=max(fitted,key=lambda item:item[0])
-    # Refit selected pipeline on all valid rows after honest test evaluation.
+    # Refit selected pipeline on the bounded, valid modelling sample. Evaluation above
+    # remains held-out; bounded fitting avoids blocking Streamlit for very large files.
     final=best[2]
     with warnings.catch_warnings():
         warnings.simplefilter('ignore'); final.fit(X,y)

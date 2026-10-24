@@ -1118,7 +1118,10 @@ def _render_modeling_page() -> None:
     .model-result{border:1px solid #d8e7fb;background:#f8fbff;border-radius:10px;padding:16px}
     .model-result-value{font-size:24px;font-weight:850;color:#078a65;overflow-wrap:anywhere}
     .model-step{color:#0c2047;font-size:16px;font-weight:800;margin-bottom:4px}
-    [data-testid="stMainBlockContainer"]{padding-top:16px!important}
+    .model-hero{max-width:100%;overflow-wrap:anywhere}
+    [data-testid="stMainBlockContainer"]{padding-top:16px!important;min-height:100vh!important}
+    [data-testid="stAppViewContainer"]{min-height:100vh!important}
+    
     @media(max-width:700px){.model-hero h1{font-size:23px!important}.model-hero-icon{width:52px;height:52px}}
     </style>
     <div class="model-hero"><div class="model-hero-icon">♧</div><div><h1>Modeling</h1><p>Automatically detect the best model, train it and make predictions from your data.</p></div></div>
@@ -1255,7 +1258,7 @@ def main():
     #      so Streamlit never allocates space for the component wrapper.
     if nav == "modeling":
         st.markdown(
-            "<style>iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{position:fixed!important;left:0!important;top:0!important;width:188px!important;height:100vh!important;min-height:100vh!important;z-index:1000!important;display:block!important;border:0!important;}[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;overflow:visible!important;}[data-testid='stMainBlockContainer']{position:relative!important;margin-left:188px!important;width:calc(100% - 188px)!important;max-width:none!important;padding:14px 24px 24px!important;box-sizing:border-box!important}@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;margin-left:188px!important;width:calc(100% - 188px)!important}}</style>",
+            "<style>iframe[title*='autolytics_workspace'],[data-testid='stCustomComponentV1'] iframe{position:fixed!important;left:0!important;top:0!important;width:248px!important;height:100vh!important;min-height:100vh!important;max-height:none!important;z-index:1000!important;display:block!important;border:0!important;}[data-testid='stCustomComponentV1']{position:fixed!important;left:0!important;top:0!important;width:0!important;height:0!important;min-width:0!important;min-height:0!important;padding:0!important;margin:0!important;overflow:visible!important;}[data-testid='stMainBlockContainer']{position:relative!important;margin-left:248px!important;width:calc(100% - 248px)!important;max-width:none!important;padding:14px 24px 24px!important;box-sizing:border-box!important}@media(max-width:700px){[data-testid='stMainBlockContainer']{padding:8px!important;margin-left:248px!important;width:calc(100% - 248px)!important}}</style>",
             unsafe_allow_html=True,
         )
         event = _workspace(**build_component_data(), key="autolytics_custom_workspace", default=None)

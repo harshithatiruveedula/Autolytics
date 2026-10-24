@@ -2,10 +2,10 @@
 :root{--navy:#0b1c3a;--blue:#2864f0;--ink:#14264a;--muted:#7285a7;--line:#e4ebf6;--bg:#f7f9fd}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}button,input,textarea{font:inherit}
 /* The EDA page keeps this existing sidebar in a narrow fixed component frame;
    Python renders the analytics content beside it to avoid nested page layouts. */
-.layout{width:100%;max-width:100%;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:calc(100vh - 2px);background:var(--bg);border-radius:12px;overflow:hidden}
-.layout.eda-mode{grid-template-columns:188px minmax(0,1fr);min-height:100vh;height:100vh;overflow:hidden;border-radius:0;background:var(--bg)}
+.layout{width:100%;max-width:100%;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;height:100vh;background:var(--bg);border-radius:12px;overflow:hidden}
+.layout.eda-mode{grid-template-columns:248px minmax(0,1fr);min-height:100vh;height:100vh;overflow:hidden;border-radius:0;background:var(--bg)}
 .layout.eda-mode.is-collapsed{grid-template-columns:64px minmax(0,1fr)}
-.sidebar{background:linear-gradient(180deg,#0b1b38,#0c2147);color:white;display:flex;flex-direction:column;padding:18px 8px;min-height:calc(100vh - 2px)}
+.sidebar{background:linear-gradient(180deg,#0b1b38,#0c2147);color:white;display:flex;flex-direction:column;padding:18px 8px;min-height:100vh;height:100vh}
 .layout.eda-mode .sidebar{min-height:100vh;height:100vh;padding:14px 8px;position:relative}
 .eda-nav-toggle{width:100%;height:34px;border:1px solid #2d4772;background:#10294f;color:#dce8ff;border-radius:7px;cursor:pointer;margin-bottom:14px;font-size:16px}
 .eda-nav-toggle:hover{background:#1b3a6b}
