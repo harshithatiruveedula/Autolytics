@@ -1,0 +1,12 @@
+AUTOLYTICS Plain-Language Insights Update
+
+This package updates the Key Insights, Data Storytelling, and Suggestions wording for Healthcare, E-commerce, Finance, and Education datasets.
+- Keeps the existing Streamlit UI and main application workflow.
+- Keeps insight values calculated from the uploaded dataset; no fixed example values are used.
+- Uses shorter storytelling explanations and simpler wording substitutions.
+- Does not change the model-training logic or natural-language SQL feature.
+
+Files to retain together in the same project folder. Start with: streamlit run app.py
+
+Validation: Python syntax compilation passed; test_domain_analytics.py reports 19 passed, 0 failed.
+Please test with your own four domain datasets before redeploying.
