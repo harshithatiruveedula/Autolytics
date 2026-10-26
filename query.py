@@ -14,7 +14,8 @@ try:
 except ImportError:  # SQLite remains as a fallback for local environments.
     duckdb = None
 
-TABLE_NAME = "dataset"
+TABLE_NAME = "table"
+_SQL_TABLE = '"table"'  # Quote the SQL identifier because TABLE is a reserved keyword.
 RESULT_ROW_LIMIT = 1000
 
 # Keep the SQLite copy of each active dataframe so every query does not reload
@@ -205,12 +206,12 @@ def _entity_lookup_sql(question: str, df: pd.DataFrame) -> str | None:
         if person_text and not re.search(r"\b(show|list|give|tell|what|which|who|the|is|are)\b", person_text, flags=re.I):
             person = person_text.replace("'", "''")
             where = f"LOWER(TRIM(CAST({_sql_col(name_col)} AS TEXT))) = LOWER('{person}')"
-            return f"SELECT {_sql_col(target)} FROM {TABLE_NAME} WHERE {where} LIMIT {RESULT_ROW_LIMIT}"
+            return f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} WHERE {where} LIMIT {RESULT_ROW_LIMIT}"
         person_values = matching_values(name_col)
         if person_values:
             person = person_values[0].replace("'", "''")
             where = f"LOWER(TRIM(CAST({_sql_col(name_col)} AS TEXT))) = LOWER('{person}')"
-            return f"SELECT {_sql_col(target)} FROM {TABLE_NAME} WHERE {where} LIMIT {RESULT_ROW_LIMIT}"
+            return f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} WHERE {where} LIMIT {RESULT_ROW_LIMIT}"
 
     # Apply every applicable filter, so combined questions do not degrade into
     # returning a whole column or a single unrelated filter.
@@ -241,7 +242,7 @@ def _entity_lookup_sql(question: str, df: pd.DataFrame) -> str | None:
 
     filters = list(dict.fromkeys(filters))
     if filters:
-        return f"SELECT * FROM {TABLE_NAME} WHERE {' AND '.join(filters)} LIMIT 100"
+        return f"SELECT * FROM {_SQL_TABLE} WHERE {' AND '.join(filters)} LIMIT 100"
 
     # Only attempt a value/entity scan when the wording signals a filter or
     # lookup. Scanning every distinct value for a simple "show age" question
@@ -251,7 +252,7 @@ def _entity_lookup_sql(question: str, df: pd.DataFrame) -> str | None:
             vals = matching_values(col)
             if vals:
                 value = vals[0].replace("'", "''")
-                return f"SELECT * FROM {TABLE_NAME} WHERE LOWER(TRIM(CAST({_sql_col(col)} AS TEXT))) = LOWER('{value}') LIMIT 100"
+                return f"SELECT * FROM {_SQL_TABLE} WHERE LOWER(TRIM(CAST({_sql_col(col)} AS TEXT))) = LOWER('{value}') LIMIT 100"
     return None
 
 
@@ -303,11 +304,11 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
         index_col = next((c for c in columns if _norm(c) in {"index", "row index", "row number"}), None)
         if index_col:
             return (
-                f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                 f"WHERE CAST({_sql_col(index_col)} AS TEXT) = '{idx_value}' LIMIT 1"
             )
         # Without an explicit index column, use zero-based row position.
-        return f"SELECT {_sql_col(target)} FROM {TABLE_NAME} LIMIT 1 OFFSET {idx_value}"
+        return f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} LIMIT 1 OFFSET {idx_value}"
 
     # If the target itself is an identifier, a trailing number without another
     # named identifier means the user is asking for that field at row/index N.
@@ -318,10 +319,10 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
         index_col = next((c for c in columns if _norm(c) in {"index", "row index", "row number"}), None)
         if index_col:
             return (
-                f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                 f"WHERE CAST({_sql_col(index_col)} AS TEXT) = '{idx_value}' LIMIT 1"
             )
-        return f"SELECT {_sql_col(target)} FROM {TABLE_NAME} LIMIT 1 OFFSET {idx_value}"
+        return f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} LIMIT 1 OFFSET {idx_value}"
 
     # Resolve an explicitly named identifier by extracting its value directly,
     # avoiding a sort/scan of every distinct ID (important for large ecommerce files).
@@ -351,7 +352,7 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
                 if bool(mask.any()):
                     matched_value = str(df.loc[mask, explicit_named_id].iloc[0]).replace("'", "''")
                     return (
-                        f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                        f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                         f"WHERE CAST({_sql_col(explicit_named_id)} AS TEXT) = '{matched_value}' LIMIT 1"
                     )
 
@@ -379,7 +380,7 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
             if len(normalized) >= 2 and re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", q_norm):
                 escaped = value.replace("'", "''")
                 return (
-                    f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                    f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                     f"WHERE LOWER(TRIM(CAST({_sql_col(col)} AS TEXT))) = LOWER('{escaped}') LIMIT 1"
                 )
 
@@ -409,7 +410,7 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
             if bool(mask.any()):
                 matched_value = str(df.loc[mask, related_id_col].iloc[0]).replace("'", "''")
                 return (
-                    f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                    f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                     f"WHERE CAST({_sql_col(related_id_col)} AS TEXT) = '{matched_value}' LIMIT 1"
                 )
 
@@ -421,7 +422,7 @@ def _individual_detail_sql(question: str, df: pd.DataFrame) -> str | None:
                 continue
             if pd.api.types.is_numeric_dtype(df[col]):
                 return (
-                    f"SELECT {_sql_col(target)} FROM {TABLE_NAME} "
+                    f"SELECT {_sql_col(target)} FROM {_SQL_TABLE} "
                     f"WHERE {_sql_col(col)} = {number} LIMIT 1"
                 )
     return None
@@ -455,7 +456,7 @@ def _grouping_query_sql(question: str, df: pd.DataFrame) -> str | None:
             selected = ", ".join(f"{_sql_col(c)} AS {_sql_col(c)}" for c in dims)
             grouped = ", ".join(_sql_col(c) for c in dims)
             return (
-                f"SELECT {selected}, COUNT(*) AS record_count FROM {TABLE_NAME} "
+                f"SELECT {selected}, COUNT(*) AS record_count FROM {_SQL_TABLE} "
                 f"GROUP BY {grouped} ORDER BY {grouped} LIMIT {RESULT_ROW_LIMIT}"
             )
 
@@ -491,7 +492,7 @@ def _grouping_query_sql(question: str, df: pd.DataFrame) -> str | None:
         dim_group = ", ".join(_sql_col(c) for c in dims)
         return (
             f"SELECT {dim_select}, {aggregate}({_sql_col(numeric_measure)}) AS {alias} "
-            f"FROM {TABLE_NAME} WHERE {_sql_col(numeric_measure)} IS NOT NULL "
+            f"FROM {_SQL_TABLE} WHERE {_sql_col(numeric_measure)} IS NOT NULL "
             f"GROUP BY {dim_group} ORDER BY {alias} DESC LIMIT {RESULT_ROW_LIMIT}"
         )
 
@@ -505,7 +506,7 @@ def _grouping_query_sql(question: str, df: pd.DataFrame) -> str | None:
             measure = left_cols[0] if left_cols else None
             count_expr = f"COUNT({_sql_col(measure)})" if measure else "COUNT(*)"
             return (
-                f"SELECT {dim_select}, {count_expr} AS record_count FROM {TABLE_NAME} "
+                f"SELECT {dim_select}, {count_expr} AS record_count FROM {_SQL_TABLE} "
                 f"GROUP BY {dim_group} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}"
             )
 
@@ -517,7 +518,7 @@ def _grouping_query_sql(question: str, df: pd.DataFrame) -> str | None:
             dim_select = ", ".join(f"{_sql_col(c)} AS {_sql_col(c)}" for c in dims)
             dim_group = ", ".join(_sql_col(c) for c in dims)
             return (
-                f"SELECT {dim_select}, COUNT(*) AS record_count FROM {TABLE_NAME} "
+                f"SELECT {dim_select}, COUNT(*) AS record_count FROM {_SQL_TABLE} "
                 f"GROUP BY {dim_group} ORDER BY {dim_group} LIMIT {RESULT_ROW_LIMIT}"
             )
     return None
@@ -619,7 +620,7 @@ def _filtered_projection_sql(question: str, df: pd.DataFrame) -> str | None:
         return None
     selected = ", ".join(_sql_col(c) for c in target_cols)
     where_sql = " AND ".join(where_parts)
-    return f"SELECT {selected} FROM {TABLE_NAME} WHERE {where_sql} LIMIT {RESULT_ROW_LIMIT}"
+    return f"SELECT {selected} FROM {_SQL_TABLE} WHERE {where_sql} LIMIT {RESULT_ROW_LIMIT}"
 
 def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
     """Map common natural-language requests to safe, read-only SQL without an API."""
@@ -663,9 +664,9 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
             # A numeric total/sum should remain arithmetic; categorical totals
             # mean the frequency of each category.
             if asks_total and _numeric(df, primary_col) and not re.search(r"\b(count|counts|number of|how many|frequency|distribution|breakdown)\b", text):
-                return f"SELECT SUM({quoted_col}) AS total_value FROM {TABLE_NAME} WHERE {quoted_col} IS NOT NULL"
+                return f"SELECT SUM({quoted_col}) AS total_value FROM {_SQL_TABLE} WHERE {quoted_col} IS NOT NULL"
             return (f"SELECT {quoted_col} AS category, COUNT(*) AS record_count "
-                    f"FROM {TABLE_NAME} WHERE {quoted_col} IS NOT NULL "
+                    f"FROM {_SQL_TABLE} WHERE {quoted_col} IS NOT NULL "
                     f"GROUP BY {quoted_col} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}")
 
     # Specific entity/value questions must be handled before broad column-only
@@ -694,26 +695,26 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
                 asks_sum = bool(re.search(r"\b(total|sum|sales|revenue|amount|spend|cost|price|quantity)\b", text))
                 asks_count = bool(re.search(r"\b(count|number of|how many|frequency|distribution|group|breakdown)\b", text))
                 if _numeric(df, measure_col) and asks_avg:
-                    return f"SELECT {gc} AS group_value, AVG({mc}) AS average_value FROM {TABLE_NAME} WHERE {mc} IS NOT NULL GROUP BY {gc} ORDER BY average_value DESC LIMIT {RESULT_ROW_LIMIT}"
+                    return f"SELECT {gc} AS group_value, AVG({mc}) AS average_value FROM {_SQL_TABLE} WHERE {mc} IS NOT NULL GROUP BY {gc} ORDER BY average_value DESC LIMIT {RESULT_ROW_LIMIT}"
                 if _numeric(df, measure_col) and asks_sum:
-                    return f"SELECT {gc} AS group_value, SUM({mc}) AS total_value FROM {TABLE_NAME} WHERE {mc} IS NOT NULL GROUP BY {gc} ORDER BY total_value DESC LIMIT {RESULT_ROW_LIMIT}"
+                    return f"SELECT {gc} AS group_value, SUM({mc}) AS total_value FROM {_SQL_TABLE} WHERE {mc} IS NOT NULL GROUP BY {gc} ORDER BY total_value DESC LIMIT {RESULT_ROW_LIMIT}"
                 # If a categorical field is requested 'by' another field, show its
                 # distribution across both columns rather than returning raw rows.
                 if not _numeric(df, measure_col) or asks_count:
                     return (f"SELECT {gc} AS {_sql_col(group_col)}, {mc} AS {_sql_col(measure_col)}, "
-                            f"COUNT(*) AS record_count FROM {TABLE_NAME} "
+                            f"COUNT(*) AS record_count FROM {_SQL_TABLE} "
                             f"GROUP BY {gc}, {mc} ORDER BY {gc}, record_count DESC LIMIT {RESULT_ROW_LIMIT}")
             elif group_col and re.search(r"\b(group|grouped|distribution|breakdown|count|number|how many)\b", text):
                 gc = _sql_col(group_col)
-                return f"SELECT {gc} AS category, COUNT(*) AS record_count FROM {TABLE_NAME} GROUP BY {gc} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}"
+                return f"SELECT {gc} AS category, COUNT(*) AS record_count FROM {_SQL_TABLE} GROUP BY {gc} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}"
 
     # First N rows / preview.
     first_rows = re.search(r"\b(?:show|list|display|get|give|fetch)?\s*(?:me\s+)?(?:the\s+)?first\s+(\d+)\s+rows?\b", text)
     if first_rows:
         n = max(1, min(int(first_rows.group(1)), RESULT_ROW_LIMIT))
-        return f"SELECT * FROM {TABLE_NAME} LIMIT {n}"
+        return f"SELECT * FROM {_SQL_TABLE} LIMIT {n}"
     if text in {"show data", "show dataset", "show table", "preview data", "show the data", "show all rows", "display dataset", "list all data"}:
-        return f"SELECT * FROM {TABLE_NAME} LIMIT 100"
+        return f"SELECT * FROM {_SQL_TABLE} LIMIT 100"
 
     # Count a named category locally (e.g. "total males", "how many females").
     gender_col = next((str(c) for c in df.columns if _norm(c) in
@@ -732,12 +733,12 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
             found = sorted(observed.intersection(aliases))
             if found:
                 vals = ", ".join("'" + v.replace("'", "''") + "'" for v in found)
-                return (f"SELECT COUNT(*) AS {requested}_count FROM {TABLE_NAME} "
+                return (f"SELECT COUNT(*) AS {requested}_count FROM {_SQL_TABLE} "
                         f"WHERE LOWER(TRIM(CAST({_sql_col(gender_col)} AS TEXT))) IN ({vals})")
 
     # Counts.
     if re.search(r"\b(how many|count|number of|total)\b.*\b(rows|records|entries|patients|customers)\b|\b(row count|record count|total records)\b", text):
-        return f"SELECT COUNT(*) AS record_count FROM {TABLE_NAME}"
+        return f"SELECT COUNT(*) AS record_count FROM {_SQL_TABLE}"
 
     # Missing/null values.
     if re.search(r"\b(missing|null|empty|blank)\b", text) and re.search(r"\b(value|cell|data|count|how many|column|columns)\b", text):
@@ -745,7 +746,7 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
             expressions = [f"SUM(CASE WHEN {_sql_col(c)} IS NULL THEN 1 ELSE 0 END) AS {_sql_col(c + '_missing')}" for c in mentioned]
         else:
             expressions = [f"SUM(CASE WHEN {_sql_col(c)} IS NULL THEN 1 ELSE 0 END) AS {_sql_col(c + '_missing')}" for c in columns]
-        return f"SELECT {', '.join(expressions)} FROM {TABLE_NAME}" if expressions else None
+        return f"SELECT {', '.join(expressions)} FROM {_SQL_TABLE}" if expressions else None
 
     # Average / mean of a numeric field by a grouping field.
     if re.search(r"\b(average|avg|mean)\b", text):
@@ -753,10 +754,10 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
         group_col = next((c for c in mentioned if c != numeric_col), None)
         if numeric_col and group_col:
             v, g = _sql_col(numeric_col), _sql_col(group_col)
-            return f"SELECT {g} AS category, AVG({v}) AS average_value FROM {TABLE_NAME} WHERE {v} IS NOT NULL GROUP BY {g} ORDER BY average_value DESC LIMIT {RESULT_ROW_LIMIT}"
+            return f"SELECT {g} AS category, AVG({v}) AS average_value FROM {_SQL_TABLE} WHERE {v} IS NOT NULL GROUP BY {g} ORDER BY average_value DESC LIMIT {RESULT_ROW_LIMIT}"
         if numeric_col:
             v = _sql_col(numeric_col)
-            return f"SELECT AVG({v}) AS average_value FROM {TABLE_NAME} WHERE {v} IS NOT NULL"
+            return f"SELECT AVG({v}) AS average_value FROM {_SQL_TABLE} WHERE {v} IS NOT NULL"
 
     # Sum / total numeric field by category.
     if re.search(r"\b(sum|total)\b", text):
@@ -764,24 +765,24 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
         group_col = next((c for c in mentioned if c != numeric_col), None)
         if numeric_col and group_col:
             v, g = _sql_col(numeric_col), _sql_col(group_col)
-            return f"SELECT {g} AS category, SUM({v}) AS total_value FROM {TABLE_NAME} WHERE {v} IS NOT NULL GROUP BY {g} ORDER BY total_value DESC LIMIT {RESULT_ROW_LIMIT}"
+            return f"SELECT {g} AS category, SUM({v}) AS total_value FROM {_SQL_TABLE} WHERE {v} IS NOT NULL GROUP BY {g} ORDER BY total_value DESC LIMIT {RESULT_ROW_LIMIT}"
         if numeric_col:
             v = _sql_col(numeric_col)
-            return f"SELECT SUM({v}) AS total_value FROM {TABLE_NAME} WHERE {v} IS NOT NULL"
+            return f"SELECT SUM({v}) AS total_value FROM {_SQL_TABLE} WHERE {v} IS NOT NULL"
 
     # Count/distribution by a column, including 'how many patients per city'.
     if re.search(r"\b(count|number|how many|frequency|distribution|breakdown|group|grouped)\b", text):
         group_col = mentioned[-1] if mentioned else None
         if group_col:
             g = _sql_col(group_col)
-            return f"SELECT {g} AS category, COUNT(*) AS record_count FROM {TABLE_NAME} GROUP BY {g} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}"
+            return f"SELECT {g} AS category, COUNT(*) AS record_count FROM {_SQL_TABLE} GROUP BY {g} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}"
 
     # Show/list/filter a specifically named column, rather than all columns.
     if mentioned and re.search(r"\b(show|list|display|give|find|view|what are|which)\b", text):
         cols_sql = ", ".join(_sql_col(c) for c in mentioned)
         distinct = bool(re.search(r"\b(unique|distinct|different)\b", text))
         prefix = "SELECT DISTINCT" if distinct else "SELECT"
-        return f"{prefix} {cols_sql} FROM {TABLE_NAME} LIMIT {RESULT_ROW_LIMIT}"
+        return f"{prefix} {cols_sql} FROM {_SQL_TABLE} LIMIT {RESULT_ROW_LIMIT}"
 
     # Highest / lowest rows.
     if re.search(r"\b(highest|maximum|largest|top|most|greatest)\b", text):
@@ -790,22 +791,22 @@ def natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
             c = _sql_col(numeric_col)
             n_match = re.search(r"\btop\s+(\d+)\b", text)
             n = min(int(n_match.group(1)), RESULT_ROW_LIMIT) if n_match else 10
-            return f"SELECT * FROM {TABLE_NAME} WHERE {c} IS NOT NULL ORDER BY {c} DESC LIMIT {n}"
+            return f"SELECT * FROM {_SQL_TABLE} WHERE {c} IS NOT NULL ORDER BY {c} DESC LIMIT {n}"
     if re.search(r"\b(lowest|minimum|smallest|least)\b", text):
         numeric_col = next((c for c in mentioned if _numeric(df, c)), None) or _first_numeric_column(df)
         if numeric_col:
             c = _sql_col(numeric_col)
-            return f"SELECT * FROM {TABLE_NAME} WHERE {c} IS NOT NULL ORDER BY {c} ASC LIMIT 10"
+            return f"SELECT * FROM {_SQL_TABLE} WHERE {c} IS NOT NULL ORDER BY {c} ASC LIMIT 10"
 
     # Unique / distinct values.
     if re.search(r"\b(unique|distinct|different)\b", text) and mentioned:
         c = _sql_col(mentioned[0])
-        return f"SELECT DISTINCT {c} FROM {TABLE_NAME} WHERE {c} IS NOT NULL LIMIT {RESULT_ROW_LIMIT}"
+        return f"SELECT DISTINCT {c} FROM {_SQL_TABLE} WHERE {c} IS NOT NULL LIMIT {RESULT_ROW_LIMIT}"
 
     # Simple column-only requests should return just the requested field(s).
     if mentioned and len(mentioned) <= 4:
         cols_sql = ", ".join(_sql_col(c) for c in mentioned)
-        return f"SELECT {cols_sql} FROM {TABLE_NAME} LIMIT {RESULT_ROW_LIMIT}"
+        return f"SELECT {cols_sql} FROM {_SQL_TABLE} LIMIT {RESULT_ROW_LIMIT}"
 
     return None
 
@@ -857,7 +858,7 @@ def _llm_natural_language_to_sql(question: str, df: pd.DataFrame) -> str | None:
     }
     system = (
         "You translate natural-language questions into ONE SQLite SELECT query for a dataframe table. "
-        "Return JSON only in the shape {\"sql\": \"SELECT ...\"}. The only table is dataset. "
+        "Return JSON only in the shape {\"sql\": \"SELECT ...\"}. The only table is \"table\" (always double-quote this table name because TABLE is a SQL keyword). "
         "Use exact column names and double-quote identifiers. Never create, update, delete, or modify data. "
         "No PRAGMA, ATTACH, extension loading, multiple statements, markdown, or explanations. "
         "For 'X by Y' when X is categorical and Y is numeric/age, return a useful grouped summary: "
@@ -1054,12 +1055,12 @@ def run_user_query(df: pd.DataFrame, text: str) -> dict[str, Any]:
         if first_rows:
             n = max(1, min(int(first_rows.group(1)), RESULT_ROW_LIMIT))
             result = _mask_sensitive_columns(df.head(n).copy())
-            return {"sql": f"SELECT * FROM {TABLE_NAME} LIMIT {n}", "generated_sql": None, "result": result, "truncated": len(df) > n}
+            return {"sql": f"SELECT * FROM {_SQL_TABLE} LIMIT {n}", "generated_sql": None, "result": result, "truncated": len(df) > n}
         # Handle common full-dataset count requests directly with pandas. This
         # avoids constructing a complete in-memory SQLite copy on the first query.
         if re.search(r"\b(how many|count|number of|total)\b.*\b(rows|records|entries|patients|customers)\b|\b(row count|record count|total records)\b", normalized):
             return {
-                "sql": f"SELECT COUNT(*) AS record_count FROM {TABLE_NAME}",
+                "sql": f"SELECT COUNT(*) AS record_count FROM {_SQL_TABLE}",
                 "generated_sql": None,
                 "result": pd.DataFrame({"record_count": [len(df)]}),
                 "truncated": False,
@@ -1078,10 +1079,10 @@ def run_user_query(df: pd.DataFrame, text: str) -> dict[str, Any]:
             if wants_count_fast and not wants_sum_fast:
                 counts_fast = df[col_fast].value_counts(dropna=True).rename_axis("category").reset_index(name="record_count")
                 counts_fast = counts_fast.head(RESULT_ROW_LIMIT)
-                return {"sql": f"SELECT {_sql_col(col_fast)} AS category, COUNT(*) AS record_count FROM {TABLE_NAME} GROUP BY {_sql_col(col_fast)} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}", "generated_sql": None, "result": _mask_sensitive_columns(counts_fast), "truncated": df[col_fast].nunique(dropna=True) > RESULT_ROW_LIMIT}
+                return {"sql": f"SELECT {_sql_col(col_fast)} AS category, COUNT(*) AS record_count FROM {_SQL_TABLE} GROUP BY {_sql_col(col_fast)} ORDER BY record_count DESC LIMIT {RESULT_ROW_LIMIT}", "generated_sql": None, "result": _mask_sensitive_columns(counts_fast), "truncated": df[col_fast].nunique(dropna=True) > RESULT_ROW_LIMIT}
             if wants_sum_fast and _numeric(df, col_fast):
                 total_fast = pd.to_numeric(df[col_fast], errors="coerce").sum()
-                return {"sql": f"SELECT SUM({_sql_col(col_fast)}) AS total_value FROM {TABLE_NAME}", "generated_sql": None, "result": pd.DataFrame({"total_value": [total_fast]}), "truncated": False}
+                return {"sql": f"SELECT SUM({_sql_col(col_fast)}) AS total_value FROM {_SQL_TABLE}", "generated_sql": None, "result": pd.DataFrame({"total_value": [total_fast]}), "truncated": False}
         generated_sql = natural_language_to_sql(query_text, df)
         if generated_sql is None:
             generated_sql = _llm_natural_language_to_sql(query_text, df)
