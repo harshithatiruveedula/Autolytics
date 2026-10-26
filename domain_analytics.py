@@ -149,11 +149,7 @@ def _looks_date(s: pd.Series) -> bool:
 
 
 def detect_domain_and_roles(df: pd.DataFrame) -> dict[str, Any]:
-    """Detect a domain and map semantic roles, allowing aliases and value cues.
-
-    This function is intentionally pure (no Streamlit calls) so it can be
-    wrapped with st.cache_data in app.py.
-    """
+    """Detect a domain and map semantic roles, allowing aliases and value cues."""
     all_maps: dict[str, dict[str, str]] = {}
     scores: dict[str, float] = {}
     for domain, role_aliases in ALIASES.items():
@@ -328,17 +324,10 @@ def _time_count(df: pd.DataFrame, date_col: str, title: str, desc: str, value_co
     else:
         s["period"] = s["date"].dt.to_period("M").dt.to_timestamp()
         agg = s.groupby("period")["value"].sum().reset_index()
-        multi_year = s["date"].dt.year.nunique() > 1
-        # Always initialise the axis title before constructing tooltip encodings.
-        # Previously axis_title was only assigned in the annual branch, causing
-        # UnboundLocalError for common ecommerce datasets spanning <= 730 days.
-        axis_title = "Month / Year" if multi_year else "Month"
-        axis_format = "%b %Y" if multi_year else "%b"
-        axis_angle = -35 if multi_year else 0
-        x = alt.X("period:T", title=axis_title,
-                  axis=alt.Axis(format=axis_format, labelAngle=axis_angle, tickCount=8, labelOverlap="greedy"))
+        x = alt.X("period:T", title="Month / Year" if s["date"].dt.year.nunique()>1 else "Month",
+                  axis=alt.Axis(format="%b %Y" if s["date"].dt.year.nunique()>1 else "%b", labelAngle=-35 if s["date"].dt.year.nunique()>1 else 0, tickCount=8, labelOverlap="greedy"))
     y_title = f"Total {value_col}" if value_col else "Record Count"
-    period_tooltip = alt.Tooltip("period:N", title=axis_title) if span > 730 else alt.Tooltip("period:T", title=axis_title, format=axis_format)
+    period_tooltip = alt.Tooltip("period:N", title=axis_title) if span > 730 else alt.Tooltip("period:T", title=axis_title, format="%b %Y")
     c = alt.Chart(agg).mark_line(point=True, color=PALETTE[0]).encode(
         x=x, y=alt.Y("value:Q", title=y_title), tooltip=[period_tooltip, alt.Tooltip("value:Q", title=y_title)]
     ).properties(height=270)
@@ -467,341 +456,151 @@ def build_domain_charts(df: pd.DataFrame, domain_info: dict[str, Any], max_chart
 
 
 def generate_narrative(df: pd.DataFrame, domain_info: dict[str, Any]) -> dict[str, list[str] | str]:
-    """Create domain-specific business findings, evidence-based story, and actions.
-
-    Findings are calculated from the uploaded data. Explanations are labelled as
-    hypotheses when the dataset cannot establish causation; absent measures are
-    never replaced with invented values.
-    """
+    """Return evidence-based key insights, suggestions, and a concise data story."""
     label = domain_info.get("label", "General")
-    domain = domain_info.get("name", "generic")
-    m = domain_info.get("mappings", {}) or {}
+    m = domain_info.get("mappings", {})
     n = len(df)
-    insights: list[str] = []
-    story_parts: list[str] = []
+    insights: list[str] = [f"The uploaded {label.lower()} dataset contains {n:,} records across {len(df.columns):,} columns."]
     suggestions: list[str] = []
-    evidence_links: list[tuple[str, str, str]] = []  # finding, interpretation, action
-
-    def col(role: str) -> str | None:
-        c = m.get(role)
-        return c if c in df.columns else None
-
-    def num(role: str) -> pd.Series:
-        c = col(role)
-        return _coerce_numeric(df[c]) if c else pd.Series(dtype=float)
-
-    def category_finding(role: str, business_label: str) -> tuple[str, str, float] | None:
-        c = col(role)
-        if not c: return None
-        vals = df[c].dropna().astype(str).str.strip()
-        counts = vals.value_counts()
-        if len(counts) < 2: return None
-        top, low = str(counts.index[0]), str(counts.index[-1])
-        pct = float(counts.iloc[0] / max(len(vals), 1) * 100)
-        return top, low, pct
-
-    def add(finding: str, interpretation: str, action: str) -> None:
-        insights.append(finding)
-        evidence_links.append((finding, interpretation, action))
-
-    # Business/domain findings first; data-quality details are secondary.
-    if domain == "ecommerce":
-        status_col = col("status")
-        sales_df = _eligible_sales_df(df, status_col)
-        amount_col, qty_col = col("revenue"), col("quantity")
-        category_col, product_col = col("category"), col("product")
-        region_col, date_col = col("region"), col("date")
-        if amount_col:
-            amounts = _coerce_numeric(sales_df[amount_col]).dropna()
-            if len(amounts):
-                total = float(amounts.sum())
-                add(f"Recorded sales value is {total:,.2f} across {len(amounts):,} usable order-line records" + (" after excluding explicitly cancelled records." if status_col else "."),
-                    "This is the recorded amount in the source data, not necessarily net revenue after discounts, refunds, tax, or shipping. A single-period total alone cannot prove growth or decline.",
-                    f"Use {total:,.2f} as the baseline only after validating the meaning of '{amount_col}', currency, and whether rows are order lines or complete orders. Track net sales and order count by week/month.")
-                if category_col:
-                    tmp = pd.DataFrame({"group": sales_df[category_col].astype("string"), "amount": _coerce_numeric(sales_df[amount_col])}).dropna()
-                    grouped = tmp.groupby("group")["amount"].sum().sort_values(ascending=False)
-                    if len(grouped) >= 2 and grouped.sum() != 0:
-                        top, low = str(grouped.index[0]), str(grouped.index[-1])
-                        share = float(grouped.iloc[0] / grouped.sum() * 100)
-                        add(f"'{top}' is the top sales category at {grouped.iloc[0]:,.2f} ({share:.1f}% of category-level recorded sales); '{low}' is lowest at {grouped.iloc[-1]:,.2f}.",
-                            f"Sales are concentrated in '{top}'. The dataset shows the outcome, but not by itself whether the difference is caused by demand, pricing, availability, promotion, or product mix.",
-                            f"Protect availability and monitor margin for '{top}', then test targeted merchandising or promotion for '{low}'. Compare category conversion, units, returns, and profit before shifting budget.")
-                if product_col:
-                    tmp = pd.DataFrame({"group": sales_df[product_col].astype("string"), "amount": _coerce_numeric(sales_df[amount_col])}).dropna()
-                    grouped = tmp.groupby("group")["amount"].sum().sort_values(ascending=False)
-                    if len(grouped) >= 2:
-                        add(f"Highest recorded sales product/item is '{grouped.index[0]}' ({grouped.iloc[0]:,.2f}); lowest among grouped items is '{grouped.index[-1]}' ({grouped.iloc[-1]:,.2f}).",
-                            "Product-level totals can reveal a best seller and weak seller, but they do not show profitability or inventory constraints unless those fields are present.",
-                            "Check stock availability, margin, returns, and product-page conversion for the strongest and weakest items; avoid discontinuing a low-sales item until exposure and stock availability are checked.")
-                if region_col:
-                    tmp = pd.DataFrame({"group": sales_df[region_col].astype("string"), "amount": _coerce_numeric(sales_df[amount_col])}).dropna()
-                    grouped = tmp.groupby("group")["amount"].sum().sort_values(ascending=False)
-                    if len(grouped) >= 2:
-                        add(f"'{grouped.index[0]}' leads recorded sales by region at {grouped.iloc[0]:,.2f}, while '{grouped.index[-1]}' records {grouped.iloc[-1]:,.2f}.",
-                            "Regional variation may reflect customer demand, delivery coverage, marketing, or availability; those causes need additional supporting columns.",
-                            "Compare regional order counts, average order value, delivery performance, and marketing spend before reallocating regional campaigns.")
-        if qty_col:
-            q = num("quantity").dropna()
-            if len(q):
-                add(f"The dataset records {q.sum():,.0f} units across {len(q):,} usable quantity values (average {q.mean():.2f} units per record).",
-                    "Units and sales value together help distinguish high-volume products from high-value products; neither metric alone establishes profit.",
-                    "Compare units sold with sales value and margin by category/product to identify volume leaders and premium-value items.")
-        if status_col:
-            statuses = df[status_col].dropna().astype(str).str.lower().str.strip()
-            cancel_mask = statuses.str.contains(r"cancelled|canceled", regex=True, na=False)
-            return_mask = statuses.str.contains(r"return|refund", regex=True, na=False)
-            if len(statuses):
-                if cancel_mask.any():
-                    pct = float(cancel_mask.mean()*100)
-                    add(f"{int(cancel_mask.sum()):,} records ({pct:.1f}% of non-missing status records) are marked cancelled.",
-                        "Cancellations may be reducing fulfilled sales, but this is a record-level rate unless unique order IDs are available and status granularity is confirmed.",
-                        "Break cancellations down by product, region, and fulfilment status; track distinct-order cancellation rate and cancelled sales value after validating order-level definitions.")
-                if return_mask.any():
-                    add(f"{int(return_mask.sum()):,} records ({return_mask.mean()*100:.1f}% of non-missing status records) contain a return/refund status.",
-                        "Returns can reduce retained revenue and signal product or fulfilment issues, but the status field alone does not explain the reason.",
-                        "Review return reasons, product quality, listing accuracy, and delivery outcomes; track return rate and retained revenue by product/category.")
-        if date_col and amount_col:
-            dates = pd.to_datetime(sales_df[date_col], errors="coerce", dayfirst=True)
-            trend = pd.DataFrame({"month": dates.dt.to_period("M"), "sales": _coerce_numeric(sales_df[amount_col])}).dropna()
-            monthly = trend.groupby("month")["sales"].sum().sort_index()
-            if len(monthly) >= 2 and monthly.iloc[0] != 0:
-                change = (monthly.iloc[-1] / monthly.iloc[0] - 1) * 100
-                direction = "increased" if change > 0 else "decreased" if change < 0 else "was unchanged"
-                add(f"Recorded sales {direction} by {abs(change):.1f}% from {monthly.index[0]} ({monthly.iloc[0]:,.2f}) to {monthly.index[-1]} ({monthly.iloc[-1]:,.2f}).",
-                    "This compares the first and last represented months only. Seasonality, partial months, missing dates, and one-off campaigns may affect the comparison; it is not proof of sustained growth or decline.",
-                    "Inspect all intermediate months and compare equivalent full periods. Break the change into order volume, average order value, category mix, cancellations, and returns.")
-
-    elif domain == "education":
-        score_roles = [(r, col(r)) for r in ("math_score", "reading_score", "writing_score", "science_score", "score") if col(r)]
-        score_summary = []
-        for role, c in score_roles:
-            v = _coerce_numeric(df[c]).dropna()
-            if len(v): score_summary.append((c, v, float(v.mean())))
-        if score_summary:
-            best = max(score_summary, key=lambda x: x[2]); weak = min(score_summary, key=lambda x: x[2])
-            summary = "; ".join(f"{c}: {mean:.1f}" for c, _, mean in score_summary)
-            add(f"Average student performance by available score field: {summary}. Strongest average: {best[0]} ({best[2]:.1f}); lowest average: {weak[0]} ({weak[2]:.1f}).",
-                f"The gap suggests {weak[0]} may be a learning-support priority, assuming the score fields use comparable scales. A score gap does not identify its cause on its own.",
-                f"Review the skills and assessment topics represented by '{weak[0]}'; provide targeted practice and compare student-level progress and score distributions after support. Track the mean, median, and share meeting the school's proficiency benchmark.")
-            for c, v, mean in score_summary:
-                if v.min() >= 0 and v.max() <= 100 and len(v) >= 5:
-                    low = int((v < 60).sum()); pct = low / len(v) * 100
-                    if pct >= 10:
-                        add(f"{low:,} records ({pct:.1f}%) score below 60 in '{c}', indicating a potential group needing academic support if 60 is an appropriate benchmark.",
-                            "A lower-score group can be hidden by the overall average. The 60-point threshold is only a screening assumption and should be replaced with the institution's official benchmark.",
-                            f"Identify students below the official proficiency threshold in '{c}', diagnose specific skill gaps, and provide structured support. Track the proportion meeting the benchmark over the next assessment cycle.")
-                        break
-        attendance_col = col("attendance")
-        if attendance_col:
-            attendance = num("attendance").dropna()
-            if len(attendance):
-                add(f"Average recorded attendance is {attendance.mean():.1f} in the source field's units; the middle 50% of values range from {attendance.quantile(.25):.1f} to {attendance.quantile(.75):.1f}.",
-                    "The spread helps identify whether low attendance is concentrated among a subset of students. Units and thresholds should be confirmed before classifying attendance as poor.",
-                    "Review students with consistently low attendance using the institution's attendance policy, then check whether attendance and assessment results move together. Track attendance and academic progress jointly.")
-                score_role = next((r for r in ("math_score", "score", "reading_score", "writing_score", "science_score") if col(r)), None)
-                if score_role:
-                    pair = pd.DataFrame({"attendance": num("attendance"), "score": num(score_role)}).dropna()
-                    if len(pair) >= 5 and pair.nunique().min() > 1:
-                        corr = float(pair.corr().iloc[0, 1])
-                        strength = "positive" if corr > .15 else "negative" if corr < -.15 else "weak"
-                        add(f"Attendance and {col(score_role)} show a {strength} relationship (Pearson r={corr:.2f}; {len(pair):,} students/records with both values).",
-                            "This association can help identify students for closer review, but it does not prove that attendance causes score changes; prior achievement and other factors may matter.",
-                            "Compare score bands across attendance bands and review other available student context before intervention. Track whether targeted attendance support is followed by improved attendance and scores.")
-        group_role = "grade_level" if col("grade_level") else "gender" if col("gender") else None
-        score_col = col("score") or col("math_score") or col("reading_score") or col("writing_score")
-        if group_role and score_col:
-            tmp = pd.DataFrame({"group": df[col(group_role)].astype("string"), "score": _coerce_numeric(df[score_col])}).dropna()
-            grouped = tmp.groupby("group")["score"].mean().sort_values(ascending=False)
-            if len(grouped) >= 2:
-                add(f"Average '{score_col}' differs across {group_role.replace('_',' ')} groups: highest '{grouped.index[0]}' ({grouped.iloc[0]:.1f}) and lowest '{grouped.index[-1]}' ({grouped.iloc[-1]:.1f}).",
-                    "Group averages can flag inequities or different support needs; group membership is not itself an explanation for the difference.",
-                    f"Compare assessment coverage, sample sizes, attendance, and available learning context for these {group_role.replace('_',' ')} groups. Use the comparison to investigate support needs, not to label individual students.")
-
-    elif domain == "healthcare":
-        condition_col, billing_col = col("condition"), col("billing")
-        if condition_col:
-            counts = df[condition_col].dropna().astype(str).value_counts()
-            if len(counts) >= 2:
-                top, low = str(counts.index[0]), str(counts.index[-1])
-                pct = float(counts.iloc[0] / max(counts.sum(), 1) * 100)
-                add(f"'{top}' is the most frequently recorded condition ({counts.iloc[0]:,} records; {pct:.1f}% of records with a condition); '{low}' is least frequent among the listed conditions.",
-                    "This describes the uploaded case mix, not disease prevalence in the wider population. Differences may reflect the facility, sampling window, or coding practices.",
-                    "Use the case mix for capacity planning and validate it against the full patient population and period. Review service demand and outcomes by condition before changing resources.")
-        if billing_col:
-            bills = num("billing").dropna()
-            if len(bills):
-                add(f"Recorded billing averages {bills.mean():,.2f} (median {bills.median():,.2f}; range {bills.min():,.2f}–{bills.max():,.2f}) across {len(bills):,} usable records.",
-                    "The difference between mean and median can indicate a skewed cost distribution. Billing amounts alone do not establish clinical quality, treatment necessity, or inefficiency.",
-                    "Review unusually high bills and compare billing by condition, admission type, insurer, and length of stay where available. Validate coding and case mix before operational changes.")
-            if condition_col:
-                tmp = pd.DataFrame({"condition": df[condition_col].astype("string"), "bill": num("billing")}).dropna()
-                grouped = tmp.groupby("condition")["bill"].agg(["mean", "count"]).query("count >= 2").sort_values("mean", ascending=False)
-                if len(grouped) >= 2:
-                    add(f"Average billing is highest for '{grouped.index[0]}' ({grouped.iloc[0]['mean']:,.2f}; n={int(grouped.iloc[0]['count'])}) and lowest for '{grouped.index[-1]}' ({grouped.iloc[-1]['mean']:,.2f}; n={int(grouped.iloc[-1]['count'])}).",
-                        "Cost variation may reflect case complexity, treatment mix, or length of stay; these explanations require clinical and operational context and are not proven by billing data alone.",
-                        "Compare like-for-like cases and review service utilization and billing components before drawing efficiency conclusions. Track adjusted cost per encounter alongside quality and outcome measures.")
-        result_col = col("test_result")
-        if result_col:
-            results = df[result_col].dropna().astype(str).str.lower().str.strip()
-            abnormal = results.str.contains(r"abnormal|positive|detected|high|low", regex=True, na=False)
-            if len(results) and abnormal.any():
-                add(f"{int(abnormal.sum()):,} records ({abnormal.mean()*100:.1f}% of non-missing '{result_col}' values) are labelled abnormal/positive/detected/high/low by text matching.",
-                    "This is a broad label-based screening count, not a diagnosis or severity measure; the meaning of results varies by test.",
-                    "Validate the allowed result categories with clinical definitions and review follow-up completion and result-specific patterns with qualified staff. Do not treat this aggregate as a diagnosis.")
-        admit_col, discharge_col = col("date"), col("discharge")
-        # If the mapping has date + a real discharge date header, calculate length of stay safely.
-        discharge_date = next((str(c) for c in df.columns if _norm(c) in {"discharge date", "date of discharge", "discharged at"}), None)
-        if admit_col and discharge_date:
-            admit = pd.to_datetime(df[admit_col], errors="coerce", dayfirst=True)
-            discharge = pd.to_datetime(df[discharge_date], errors="coerce", dayfirst=True)
-            stay = (discharge - admit).dt.total_seconds() / 86400
-            stay = stay[(stay >= 0) & (stay <= 3650)]
-            if len(stay):
-                add(f"Calculated length of stay averages {stay.mean():.1f} days (median {stay.median():.1f}) across {len(stay):,} records with valid admission and discharge dates.",
-                    "A long stay may reflect case complexity or discharge processes; this dataset alone may not separate clinical need from operational delay.",
-                    "Review long-stay cases by condition and admission type with clinical teams. Track median stay alongside readmissions, outcomes, and patient safety so shorter stays are not pursued at the expense of care.")
-
-    elif domain == "finance":
-        income_col, expense_col, profit_col = col("income"), col("expense"), col("profit")
-        if income_col or expense_col or profit_col:
-            totals = {}
-            for role, title in (("income", "income"), ("expense", "expenses"), ("profit", "profit")):
-                if col(role):
-                    values = num(role).dropna()
-                    if len(values):
-                        totals[role] = float(values.sum())
-                        add(f"Total recorded {title} is {values.sum():,.2f} across {len(values):,} usable values in '{col(role)}'.",
-                            "A total is meaningful only if the records cover a consistent period, currency, and accounting basis. It should not be interpreted as profitability unless the fields support that definition.",
-                            f"Validate the period and accounting meaning of '{col(role)}', then monitor the total by month and category. Compare like-for-like periods to detect material increases or declines.")
-            if income_col and expense_col and not profit_col:
-                inc, exp = num("income").dropna(), num("expense").dropna()
-                if len(inc) and len(exp):
-                    balance = float(inc.sum() - exp.sum())
-                    add(f"Recorded income minus recorded expenses is {balance:,.2f} as a provisional balance, provided both fields share compatible periods, currency, and accounting definitions.",
-                        "This is not formal net profit unless the source includes all relevant revenue and costs and uses matching records/periods.",
-                        "Reconcile income and expense coverage and classify major cost drivers before treating the balance as performance. Track operating margin only when the underlying definitions are validated.")
-        credit_col = col("credit_limit")
-        if credit_col:
-            credit = num("credit_limit").dropna()
-            if len(credit):
-                add(f"Median credit limit is {credit.median():,.2f}; the middle 50% spans {credit.quantile(.25):,.2f}–{credit.quantile(.75):,.2f} across {len(credit):,} usable card records.",
-                    "This describes the card portfolio's assigned limits, not customer spending, income, or profitability. Limits alone do not indicate credit utilization without balances or available-credit data.",
-                    "Segment limits by card type and customer risk context where permitted, and add balance/available-credit fields to calculate utilization. Track delinquency and exposure metrics only if those data are available.")
-        dark_col = col("dark_web")
-        if dark_col:
-            flags = df[dark_col].dropna().astype(str).str.lower().str.strip()
-            positive = flags.isin(["yes", "true", "1", "flagged", "positive", "detected"])
-            if len(flags):
-                add(f"{int(positive.sum()):,} records ({positive.mean()*100:.1f}% of non-missing flags) are marked as a positive dark-web/compromise flag in '{dark_col}'.",
-                    "A positive flag warrants validation and appropriate security handling; it is not, by itself, proof of a fraudulent transaction or financial loss.",
-                    "Follow the organization's approved security process to validate positive flags and assess exposure. Track confirmed cases and remediation time; do not publish sensitive card details.")
-        for role, title in (("card_brand", "card brand"), ("card_type", "card type")):
-            c = col(role)
-            if c:
-                counts = df[c].dropna().astype(str).value_counts()
-                if len(counts) >= 2:
-                    add(f"'{counts.index[0]}' is the most common {title} ({counts.iloc[0]:,} records; {counts.iloc[0]/counts.sum()*100:.1f}% of non-missing records).",
-                        "Portfolio composition may affect exposure and servicing needs, but category frequency does not indicate revenue or risk without transaction and outcome data.",
-                        f"Review portfolio mix alongside utilization, losses, and service outcomes if available; do not infer spend or profitability from '{c}' alone.")
-                    break
-
-    # Keep data quality visible, but do not let it dominate business analysis.
+    def col(role): return m.get(role)
+    # Data quality insight is always valid.
     missing = df.isna().sum().sort_values(ascending=False)
     if len(missing) and int(missing.iloc[0]) > 0:
         c = str(missing.index[0]); count = int(missing.iloc[0]); pct = count / max(n, 1) * 100
-        insights.append(f"Data quality: '{c}' is missing in {count:,} records ({pct:.1f}%), which may limit analysis that relies on this field.")
-        suggestions.append(f"Check why '{c}' is missing and whether missingness is concentrated in a particular group or period before using related metrics for decisions.")
+        insights.append(f"{c} has the most missing values: {count:,} ({pct:.1f}% of records).")
+        suggestions.append(f"Review missingness in '{c}' ({pct:.1f}% of records) before using it for decisions; confirm whether the gaps are expected or systematic.")
     dup = int(df.duplicated().sum())
     if dup:
-        insights.append(f"Data quality: {dup:,} fully duplicated rows ({dup/max(n,1)*100:.1f}% of records) were found; verify whether they are true duplicates before counting outcomes.")
-        suggestions.append("Validate duplicate rows against the appropriate business key (order, patient encounter, account, or student) before removing them.")
+        insights.append(f"The dataset contains {dup:,} fully duplicated rows ({dup/max(n,1)*100:.1f}% of records).")
+        suggestions.append("Review duplicate rows and confirm whether they represent repeated events or accidental duplicates before counting transactions, patients, or students.")
+    # Most frequent categorical values from semantically meaningful roles.
+    preferred = {
+        "ecommerce": ["category", "status", "region", "product"],
+        "healthcare": ["condition", "medication", "department", "discharge", "gender"],
+        "finance": ["category", "card_brand", "card_type", "dark_web"],
+        "education": ["grade_level", "gender", "extracurricular", "outcome"],
+        "generic": [],
+    }.get(domain_info.get("name"), [])
+    for role in preferred:
+        c = col(role)
+        if not c or c not in df: continue
+        vc = df[c].dropna().astype(str).value_counts()
+        if len(vc) and len(vc) >= 2:
+            top, cnt = str(vc.index[0]), int(vc.iloc[0]); pct = cnt / max(int(df[c].notna().sum()), 1) * 100
+            insights.append(f"In {c}, '{top}' is the most frequent category ({cnt:,} records; {pct:.1f}% of non-missing values).")
+            suggestions.append(f"Review the drivers behind '{top}' in {c} ({pct:.1f}% of non-missing values) and compare its outcomes with other groups before taking action.")
+            break
+    # Domain-specific headline metrics. These are calculated from the current
+    # dataset and use explicit labels so row counts are not confused with orders.
+    domain_name = domain_info.get("name")
+    if domain_name == "ecommerce":
+        status_col = col("status")
+        sales_df = _eligible_sales_df(df, status_col)
+        amount_col = col("revenue")
+        if amount_col and amount_col in sales_df:
+            amount_values = _coerce_numeric(sales_df[amount_col]).dropna()
+            if len(amount_values):
+                insights.append(f"Recorded order-line amount totals {amount_values.sum():,.2f} across {len(amount_values):,} usable records after excluding explicitly cancelled rows where status is available.")
+                order_id = col("order_id")
+                if order_id and order_id in sales_df:
+                    per_order = pd.DataFrame({"order": sales_df[order_id], "amount": _coerce_numeric(sales_df[amount_col])}).dropna().groupby("order")["amount"].sum()
+                    if len(per_order):
+                        insights.append(f"{len(per_order):,} distinct orders are represented; mean recorded order total is {per_order.mean():,.2f} based on summing available line amounts per order.")
+        if status_col and status_col in df:
+            status_values = df[status_col].astype("string").str.lower().str.strip()
+            cancelled = status_values.str.contains(r"cancelled|canceled", regex=True, na=False)
+            if status_values.notna().sum():
+                count_cancelled = int(cancelled.sum())
+                pct_cancelled = count_cancelled / int(status_values.notna().sum()) * 100
+                insights.append(f"{count_cancelled:,} records ({pct_cancelled:.1f}% of non-missing status records) are marked cancelled; confirm whether statuses are line-level or order-level before interpreting this as an order cancellation rate.")
+                if count_cancelled:
+                    suggestions.append(f"Review the {count_cancelled:,} records marked cancelled and compare their product, region, and fulfilment patterns; this status-based record percentage is not necessarily a distinct-order cancellation rate.")
+    elif domain_name == "finance":
+        income_col, expense_col, profit_col = col("income"), col("expense"), col("profit")
+        for role_label, column in (("income", income_col), ("expenses", expense_col), ("profit", profit_col)):
+            if column and column in df:
+                vals = _coerce_numeric(df[column]).dropna()
+                if len(vals):
+                    insights.append(f"Total recorded {role_label} is {vals.sum():,.2f} across {len(vals):,} usable values in '{column}'.")
+        if not profit_col and income_col and expense_col:
+            inc = _coerce_numeric(df[income_col]).dropna()
+            exp = _coerce_numeric(df[expense_col]).dropna()
+            if len(inc) and len(exp):
+                insights.append(f"The difference between total recorded income and expenses is {inc.sum()-exp.sum():,.2f}; this is a derived balance only if both fields use compatible periods, currencies, and accounting definitions.")
+        if col("credit_limit") and col("credit_limit") in df:
+            credit_values = _coerce_numeric(df[col("credit_limit")]).dropna()
+            if len(credit_values):
+                insights.append(f"The median recorded credit limit is {credit_values.median():,.2f} across {len(credit_values):,} usable card records; credit limit is not income or spending.")
+    elif domain_name == "education":
+        subject_cols = [(role, col(role)) for role in ("math_score", "reading_score", "writing_score", "science_score", "score") if col(role) and col(role) in df]
+        subject_means = []
+        for role, column in subject_cols:
+            vals = _coerce_numeric(df[column]).dropna()
+            if len(vals): subject_means.append((column, float(vals.mean()), len(vals)))
+        if len(subject_means) >= 2:
+            highest = max(subject_means, key=lambda x: x[1]); lowest = min(subject_means, key=lambda x: x[1])
+            summary = "; ".join(f"{name}: {mean:.2f}" for name, mean, _ in subject_means)
+            insights.append(f"Average scores by available score field are {summary}. Highest mean: {highest[0]} ({highest[1]:.2f}); lowest mean: {lowest[0]} ({lowest[1]:.2f}). These comparisons are descriptive and depend on comparable score scales.")
+        if col("attendance") and col("attendance") in df:
+            vals = _coerce_numeric(df[col("attendance")]).dropna()
+            if len(vals): insights.append(f"Average recorded attendance is {vals.mean():.2f} in the source field's units across {len(vals):,} usable records.")
 
-    if not insights:
-        insights.append(f"The uploaded {label.lower()} dataset contains {n:,} records across {len(df.columns):,} fields, but no domain-specific performance metric could be calculated from the recognized columns.")
-        suggestions.append("Add or map the domain's core measures and outcomes (for example, sales and orders, student scores, patient outcomes, or transaction measures) to enable business-level analysis.")
-
-    # Prioritize business findings and avoid filling the UI with repetitive generic checks.
-    insights = list(dict.fromkeys(insights))[:7]
-    suggestions = list(dict.fromkeys(suggestions))[:7]
-
-    # Storytelling links a few of the findings to evidence and possible meaning.
-    selected = evidence_links[:3]
-    if selected:
-        for i, (finding, interpretation, action) in enumerate(selected, 1):
-            story_parts.append(f"{i}. {finding}\nWhat the data suggests: {interpretation}")
-        story_parts.append("Interpretation boundary: these are patterns in the uploaded records, not proof of cause and effect. Confirm definitions, coverage, and relevant business context before making high-impact decisions.")
-        # Align the first recommendations with the story's actual findings.
-        suggestions = list(dict.fromkeys([action for _, _, action in selected] + suggestions))[:7]
-    else:
-        story_parts.append(f"This {label.lower()} dataset has {n:,} records and {len(df.columns):,} fields. The recognized columns do not support a reliable domain-specific explanation yet; add relevant outcome measures or clarify field definitions before drawing business conclusions.")
-
-    if domain == "generic":
-        # Generic fallback should be candid, not pretend to know the business domain.
-        story_parts = [f"The dataset has {n:,} records and {len(df.columns):,} columns. The system could not confidently identify its subject, so it has not guessed what the numbers mean."]
-
-    # Use plain, concise wording in the UI. Keep the calculated values and findings,
-    # but remove extra caveats and specialist wording that make the results hard to scan.
-    def plain(text: str, first_sentence: bool = False) -> str:
-        text = str(text).replace("**", "").strip()
-        replacements = [
-            ("usable order-line records", "order records"),
-            ("usable values", "available values"),
-            ("non-missing", "available"),
-            ("recorded sales value", "sales total"),
-            ("recorded sales", "sales"),
-            ("recorded billing", "billing"),
-            ("recorded amount", "amount"),
-            ("category-level", "category"),
-            ("portfolio composition", "the mix of accounts"),
-            ("case mix", "types of cases in this dataset"),
-            ("uploaded the types of cases in this dataset", "uploaded patient records"),
-            ("the the types of cases in this dataset", "the types of cases in this dataset"),
-            ("domain-specific", "specific to this dataset"),
-            ("operational context", "day-to-day operations"),
-            ("clinical context", "patient-care details"),
-            ("causation", "cause and effect"),
-            ("business key", "unique ID"),
-            ("fulfilment", "delivery"),
-            ("fulfillment", "delivery"),
-            ("material increases or declines", "large changes"),
-            ("like-for-like", "similar"),
-            ("reconcile", "check and match"),
-            ("validate", "check"),
-            ("Validate", "Check"),
-            ("Validating", "Checking"),
-            ("utilization", "usage"),
-            ("utilisation", "usage"),
-            ("segmentation", "grouping"),
-            ("outcomes", "results"),
-            ("outcome measures", "result measures"),
-            ("Interpretation boundary:", "Please note:"),
-            ("What the data suggests:", "What this means:"),
-        ]
-        for old_text, new_text in replacements:
-            text = text.replace(old_text, new_text)
-        if first_sentence:
-            # Keep the first complete sentence so cards remain easy to scan.
-            import re as _re
-            parts = _re.split(r"(?<=[.!?])\s+", text)
-            text = parts[0] if parts else text
-        return text
-
-    simple_insights = [plain(x) for x in insights]
-    simple_suggestions = [plain(x, first_sentence=True) for x in suggestions]
-    simple_story = []
-    for part in story_parts:
-        lines = []
-        for line in part.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith("What this means:") or line.startswith("What the data suggests:"):
-                line = plain(line, first_sentence=True)
-            else:
-                line = plain(line)
-            lines.append(line)
-        if lines:
-            simple_story.append("\n".join(lines))
-    return {"insights": simple_insights, "suggestions": simple_suggestions, "story": "\n\n".join(simple_story)}
-
+    # Numeric measure insight: avoid treating any finance amount as income/profit.
+    numeric_role = {
+        "ecommerce": col("revenue"), "healthcare": col("billing"),
+        "finance": col("profit") or col("income") or col("expense") or col("amount") or col("credit_limit"),
+        "education": col("math_score") or col("score") or col("attendance"),
+    }.get(domain_info.get("name"))
+    if numeric_role and numeric_role in df:
+        measure_df = df
+        measure_note = ""
+        if domain_info.get("name") == "ecommerce" and col("status"):
+            measure_df = _eligible_sales_df(df, col("status"))
+            measure_note = " after excluding explicitly cancelled records"
+        values = _coerce_numeric(measure_df[numeric_role]).dropna()
+        if len(values):
+            insights.append(f"{numeric_role}{measure_note} has a mean of {values.mean():,.2f}, a median of {values.median():,.2f}, and a range from {values.min():,.2f} to {values.max():,.2f} across {len(values):,} usable values.")
+            q1, q3 = values.quantile(.25), values.quantile(.75); iqr = q3-q1
+            outliers = int(((values < q1-1.5*iqr) | (values > q3+1.5*iqr)).sum()) if iqr else 0
+            if outliers:
+                suggestions.append(f"Review {outliers:,} unusually low/high values in '{numeric_role}' using business context and data validation; statistical outliers are not automatically errors or fraud.")
+    # Time trend insight, with correct semantic caveats.
+    date_col = col("date")
+    if date_col and date_col in df:
+        dates = pd.to_datetime(df[date_col], errors="coerce", dayfirst=True).dropna()
+        if len(dates) >= 3 and dates.dt.to_period("M").nunique() >= 2:
+            monthly = dates.dt.to_period("M").value_counts().sort_index()
+            first, last = int(monthly.iloc[0]), int(monthly.iloc[-1])
+            change = ((last-first)/first*100) if first else None
+            if change is not None:
+                insights.append(f"Record volume changed from {first:,} in {monthly.index[0]} to {last:,} in {monthly.index[-1]} ({change:+.1f}% between the first and last represented months). This compares endpoint counts, not a causal trend.")
+                suggestions.append("Inspect intermediate periods and check for incomplete date coverage or seasonality before interpreting the first-to-last change.")
+    # Education association: descriptive correlation only.
+    if domain_info.get("name") == "education" and col("attendance"):
+        score = col("math_score") or col("score")
+        if score and score in df:
+            pair = pd.DataFrame({"attendance": _coerce_numeric(df[col("attendance")]), "score": _coerce_numeric(df[score])}).dropna()
+            if len(pair) >= 5 and pair.nunique().min() > 1:
+                corr = pair.corr().iloc[0,1]
+                insights.append(f"Attendance and {score} have a Pearson correlation of {corr:.2f} across {len(pair):,} complete records; this is an association, not evidence that one causes the other.")
+                suggestions.append("Explore attendance and score patterns by grade and other available student context; do not infer that attendance alone explains performance.")
+    # Healthcare safety and finance caveats
+    if domain_info.get("name") == "healthcare":
+        suggestions.append("Use these patterns for operational review only; recorded associations do not establish clinical causes or treatment recommendations.")
+    if domain_info.get("name") == "finance":
+        if col("dark_web"):
+            vals = df[col("dark_web")].dropna().astype(str).str.lower()
+            positive = vals.isin(["yes", "true", "1", "flagged", "positive"]).sum()
+            insights.append(f"{int(positive):,} records are marked positive in '{col('dark_web')}' out of {len(vals):,} non-missing flags; validate the flag definition before interpreting risk.")
+        suggestions.append("Treat unusual values or risk flags as items for validation, not confirmed fraud or investment advice.")
+    if not suggestions:
+        suggestions.append("No domain-specific action could be supported confidently from the available columns. Add well-defined measures, dates, or outcomes to enable more targeted recommendations.")
+    insights = list(dict.fromkeys(insights))[:6]
+    suggestions = list(dict.fromkeys(suggestions))[:6]
+    # Connected, data-grounded story rather than a fixed domain template.
+    story_parts = [f"This analysis covers {n:,} records and {len(df.columns):,} columns in a dataset classified as {label.lower()} (rule-based confidence {domain_info.get('confidence', 0):.0%})."]
+    if len(insights) > 1: story_parts.append(insights[1])
+    if len(insights) > 2: story_parts.append(insights[2])
+    story_parts.append("These are descriptive patterns in the uploaded data. Missing fields, duplicate records, sampling, and data definitions can affect interpretation.")
+    if suggestions: story_parts.append("A useful next step is: " + suggestions[0])
+    return {"insights": insights, "suggestions": suggestions, "story": "\n\n".join(story_parts)}
