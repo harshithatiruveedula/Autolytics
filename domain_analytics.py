@@ -256,10 +256,10 @@ def _bar_count(df: pd.DataFrame, col: str, title: str, desc: str) -> dict[str, A
     if data.empty: return None
     c = alt.Chart(data).mark_bar(cornerRadiusEnd=3).encode(
         x=alt.X("count:Q", title="Record Count"),
-        y=alt.Y("category:N", sort="-x", title=col, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
+        y=alt.Y("category:N", sort="-x", title=col, axis=alt.Axis(labelLimit=220)),
         color=alt.Color("category:N", scale=alt.Scale(range=PALETTE), legend=None),
         tooltip=[alt.Tooltip("category:N", title=col), alt.Tooltip("count:Q", title="Records")]
-    ).properties(height=max(220, min(520, len(data)*34)), padding={"left": 8, "right": 18, "top": 8, "bottom": 8})
+    ).properties(height=max(180, min(420, len(data)*25)))
     return _chart(title, desc, "bar", [col], c)
 
 
@@ -284,10 +284,10 @@ def _cat_num(df: pd.DataFrame, cat: str, num: str, title: str, desc: str, agg: s
     metric_label = "Total" if agg == "sum" else "Median" if agg == "median" else "Average"
     c = alt.Chart(grouped).mark_bar(cornerRadiusEnd=3).encode(
         x=alt.X("value:Q", title=f"{metric_label} {num}"),
-        y=alt.Y("category:N", sort="-x", title=cat, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
+        y=alt.Y("category:N", sort="-x", title=cat, axis=alt.Axis(labelLimit=220)),
         color=alt.Color("category:N", scale=alt.Scale(range=PALETTE), legend=None),
         tooltip=[alt.Tooltip("category:N", title=cat), alt.Tooltip("value:Q", title=num, format=",.2f")]
-    ).properties(height=max(280, min(620, len(grouped)*44)), padding={"left": 12, "right": 20, "top": 10, "bottom": 10})
+    ).properties(height=max(200, min(420, len(grouped)*26)))
     return _chart(title, desc, "cat_num_bar", [cat, num], c)
 
 
@@ -301,10 +301,10 @@ def _cat_cat(df: pd.DataFrame, cat_a: str, cat_b: str, title: str, desc: str) ->
     agg = s.groupby([cat_a, cat_b]).size().reset_index(name="count")
     c = alt.Chart(agg).mark_bar().encode(
         x=alt.X("count:Q", title="Record Count"),
-        y=alt.Y(f"{cat_a}:N", sort="-x", title=cat_a, axis=alt.Axis(labelLimit=360, labelOverlap=False, labelFontSize=11, labelPadding=9)),
+        y=alt.Y(f"{cat_a}:N", sort="-x", title=cat_a, axis=alt.Axis(labelLimit=180)),
         color=alt.Color(f"{cat_b}:N", scale=alt.Scale(range=PALETTE), legend=alt.Legend(title=cat_b, orient="bottom", columns=3)),
         tooltip=[f"{cat_a}:N", f"{cat_b}:N", alt.Tooltip("count:Q", title="Records")]
-    ).properties(height=max(300, min(620, s[cat_a].nunique()*48)), padding={"left": 12, "right": 20, "top": 10, "bottom": 10})
+    ).properties(height=max(240, min(500, s[cat_a].nunique()*38)))
     return _chart(title, desc, "cat_cat", [cat_a, cat_b], c)
 
 
@@ -738,6 +738,70 @@ def generate_narrative(df: pd.DataFrame, domain_info: dict[str, Any]) -> dict[st
 
     if domain == "generic":
         # Generic fallback should be candid, not pretend to know the business domain.
-        story_parts = [f"The dataset has {n:,} records and {len(df.columns):,} columns. Its business domain could not be confidently identified, so the analysis avoids labelling generic statistics as sales, performance, costs, or outcomes."]
-    return {"insights": insights, "suggestions": suggestions, "story": "\n\n".join(story_parts)}
+        story_parts = [f"The dataset has {n:,} records and {len(df.columns):,} columns. The system could not confidently identify its subject, so it has not guessed what the numbers mean."]
+
+    # Use plain, concise wording in the UI. Keep the calculated values and findings,
+    # but remove extra caveats and specialist wording that make the results hard to scan.
+    def plain(text: str, first_sentence: bool = False) -> str:
+        text = str(text).replace("**", "").strip()
+        replacements = [
+            ("usable order-line records", "order records"),
+            ("usable values", "available values"),
+            ("non-missing", "available"),
+            ("recorded sales value", "sales total"),
+            ("recorded sales", "sales"),
+            ("recorded billing", "billing"),
+            ("recorded amount", "amount"),
+            ("category-level", "category"),
+            ("portfolio composition", "the mix of accounts"),
+            ("case mix", "types of cases in this dataset"),
+            ("uploaded the types of cases in this dataset", "uploaded patient records"),
+            ("the the types of cases in this dataset", "the types of cases in this dataset"),
+            ("domain-specific", "specific to this dataset"),
+            ("operational context", "day-to-day operations"),
+            ("clinical context", "patient-care details"),
+            ("causation", "cause and effect"),
+            ("business key", "unique ID"),
+            ("fulfilment", "delivery"),
+            ("fulfillment", "delivery"),
+            ("material increases or declines", "large changes"),
+            ("like-for-like", "similar"),
+            ("reconcile", "check and match"),
+            ("validate", "check"),
+            ("Validate", "Check"),
+            ("Validating", "Checking"),
+            ("utilization", "usage"),
+            ("utilisation", "usage"),
+            ("segmentation", "grouping"),
+            ("outcomes", "results"),
+            ("outcome measures", "result measures"),
+            ("Interpretation boundary:", "Please note:"),
+            ("What the data suggests:", "What this means:"),
+        ]
+        for old_text, new_text in replacements:
+            text = text.replace(old_text, new_text)
+        if first_sentence:
+            # Keep the first complete sentence so cards remain easy to scan.
+            import re as _re
+            parts = _re.split(r"(?<=[.!?])\s+", text)
+            text = parts[0] if parts else text
+        return text
+
+    simple_insights = [plain(x) for x in insights]
+    simple_suggestions = [plain(x, first_sentence=True) for x in suggestions]
+    simple_story = []
+    for part in story_parts:
+        lines = []
+        for line in part.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("What this means:") or line.startswith("What the data suggests:"):
+                line = plain(line, first_sentence=True)
+            else:
+                line = plain(line)
+            lines.append(line)
+        if lines:
+            simple_story.append("\n".join(lines))
+    return {"insights": simple_insights, "suggestions": simple_suggestions, "story": "\n\n".join(simple_story)}
 
